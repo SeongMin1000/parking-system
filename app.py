@@ -859,7 +859,7 @@ def get_my_reservations():
     cur = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor(factory=RealDictCursor)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # 2. 해당 UserID의 모든 예약 조회
         # (ShareSchedule, ParkingSpace, ParkingZone과 JOIN하여
@@ -896,6 +896,65 @@ def get_my_reservations():
     except psycopg2.Error as e:
         if conn:
             conn.rollback()
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+# ===============================================================
+# 17. 입주민: 내 주차 공간 조회 (GET /my-spaces)
+# ===============================================================
+@app.route('/my-spaces', methods=['GET'])
+def get_my_spaces():
+    # 1. 클라이언트로부터 UserID 받기 (쿼리 파라미터)
+    user_id = request.args.get('user_id')
+
+    if not user_id:
+        return jsonify(error="잘못된 요청입니다. 'user_id' 쿼리 파라미터가 필요합니다."), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 해당 UserID(OwnerID)의 모든 ParkingSpace 조회
+        # (ParkingZone과 JOIN하여 구역 이름도 함께 반환)
+        query_select = sql.SQL(
+            """
+            SELECT 
+                ps.SpaceID,
+                pz.ZoneName,
+                pz.Status AS ZoneStatus
+            FROM ParkingSpace ps
+            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            WHERE 
+                ps.OwnerID = %s
+            ORDER BY 
+                ps.SpaceID ASC;
+            """
+        )
+        
+        cur.execute(query_select, (user_id,))
+        
+        spaces = cur.fetchall()
+        
+        if not spaces:
+            # DBeaver에서 'test_resident'에게 ParkingSpace를 할당했는지 확인
+            return jsonify(message="소유한 주차 공간이 없습니다.", spaces=[]), 200
+
+        return jsonify(spaces=spaces), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        # Role='Resident'가 아닌 ID로 조회 시도 시 (FK 오류는 없지만)
         return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
     except Exception as e:
         if conn:
