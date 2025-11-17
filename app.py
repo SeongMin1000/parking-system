@@ -717,6 +717,72 @@ def cancel_reservation(reservation_id):
         if conn:
             conn.close()
 
+# =============================================================
+# 14. 입주민: 비움 시간 수정 (PUT /schedule/<int:schedule_id>)
+# =============================================================
+@app.route('/schedule/<int:schedule_id>', methods=['PUT'])
+def update_share_schedule(schedule_id):
+    # 1. 클라이언트로부터 JSON 데이터 받기
+    try:
+        data = request.get_json()
+        start_time = data['ShareStartTime']
+        end_time = data['ShareEndTime']
+    except Exception as e:
+        return jsonify(error="잘못된 요청 데이터입니다. 'ShareStartTime'과 'ShareEndTime'이 필요합니다.", details=str(e)), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 비움 시간 업데이트
+        # 이 UPDATE가 'fn_cancel_reservations_on_schedule_change' 트리거를 작동시킵니다.
+        # 트리거는 이 ShareID에 물려있던 'Pending' 예약을 'Canceled'로 자동 변경합니다.
+        query_update = sql.SQL(
+            """
+            UPDATE ShareSchedule
+            SET ShareStartTime = %s, ShareEndTime = %s
+            WHERE ShareID = %s
+            RETURNING ShareID, ShareStartTime, ShareEndTime;
+            """
+        )
+        
+        cur.execute(query_update, (start_time, end_time, schedule_id))
+        
+        updated_schedule = cur.fetchone()
+        
+        if not updated_schedule:
+            return jsonify(error="존재하지 않는 ShareID입니다."), 404
+
+        conn.commit()
+
+        return jsonify(
+            message="비움 시간이 성공적으로 수정되었습니다. (관련 'Pending' 예약이 자동 취소되었을 수 있습니다)",
+            updated_schedule=updated_schedule
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        # DDL의 CHECK 제약 조건 위반 (예: 종료 시간이 시작 시간보다 빠름)
+        if e.pgcode == '23514':
+            return jsonify(error="CHECK 제약 조건 위반: ShareEndTime은 ShareStartTime보다 늦어야 합니다."), 400
+        # DDL의 GIST 제약 조건 위반 (시간 중첩)
+        if e.pgcode == '23P01': 
+            return jsonify(error="시간 중첩 오류: 해당 공간의 다른 공유 시간과 겹칩니다."), 409
+            
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
