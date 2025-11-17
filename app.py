@@ -504,10 +504,6 @@ def request_entry():
 # =========================================================
 @app.route('/approve-entry', methods=['POST'])
 def approve_entry():
-    """
-    관리자가 방문자의 입차 요청을 승인하여 게이트를 개방합니다.
-    """
-    
     # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
@@ -535,7 +531,7 @@ def approve_entry():
         if reservation['status'] != 'InUse':
             return jsonify(error="승인 대상 예약이 'InUse'(이용중/입차대기) 상태가 아닙니다.", details=f"현재 상태: {reservation['status']}"), 400
 
-        # 3. 게이트 상태를 'Open'으로 변경 (제안서 기능)
+        # 3. 게이트 상태를 'Open'으로 변경
         query_open_gate = sql.SQL(
             """
             UPDATE Gate SET Status = 'Open' WHERE GateID = %s
@@ -572,6 +568,93 @@ def approve_entry():
             cur.close()
         if conn:
             conn.close()
+
+# =========================================================
+# 12. 방문자: 출차 요청 (POST /exit-request)
+# =========================================================
+@app.route('/exit-request', methods=['POST'])
+def request_exit():
+    """
+    방문자가 이용을 마치고 출차를 요청합니다.
+    (제안서 기능: 'Completed'로 상태 변경 및 로그 기록)
+    """
+    
+    # 1. 클라이언트로부터 JSON 데이터 받기
+    try:
+        data = request.get_json()
+        user_id = data['UserID']
+        gate_id = data['GateID'] # 어느 게이트로 나가는지
+    except Exception as e:
+        return jsonify(error="잘못된 요청 데이터입니다. 'UserID'와 'GateID'가 필요합니다.", details=str(e)), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(factory=RealDictCursor)
+
+        # 2. 'InUse' 상태인 본인의 예약 확인
+        # (출차는 아무 때나 할 수 있어야 하므로 시간(NOW()) 검사는 제외)
+        query_find_reservation = sql.SQL(
+            """
+            SELECT ReservationID, Status
+            FROM Reservation
+            WHERE VisitorID = %s
+              AND Status = 'InUse'
+            LIMIT 1;
+            """
+        )
+        cur.execute(query_find_reservation, (user_id,))
+        valid_reservation = cur.fetchone()
+
+        if not valid_reservation:
+            return jsonify(error="출차할 수 있는 '이용중(InUse)' 상태의 예약이 없습니다."), 404
+        
+        reservation_id = valid_reservation['reservationid']
+
+        # 3. 게이트 로그 기록 ('Exit')
+        query_insert_log = sql.SQL(
+            """
+            INSERT INTO GateLog (ReservationID, GateID, Action)
+            VALUES (%s, %s, 'Exit')
+            RETURNING LogID, Timestamp
+            """
+        )
+        cur.execute(query_insert_log, (reservation_id, gate_id))
+        new_log = cur.fetchone()
+        
+        # 4. 예약 상태를 'Completed'(완료)로 변경
+        cur.execute(
+            sql.SQL('UPDATE Reservation SET Status = %s WHERE ReservationID = %s'),
+            ('Completed', reservation_id)
+        )
+
+        conn.commit()
+
+        return jsonify(
+            message="출차가 기록되었습니다. 이용해 주셔서 감사합니다.",
+            log_id=new_log['logid'],
+            reservation_id=reservation_id,
+            timestamp=new_log['timestamp']
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        if e.pgcode == '23503': # FK 오류
+            return jsonify(error="존재하지 않는 GateID입니다."), 404
+            
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
