@@ -966,6 +966,106 @@ def get_my_spaces():
         if conn:
             conn.close()
 
+# ===============================================================
+# 18. 관리자: 로그 조회 및 모니터링 (GET /admin/logs)
+# ===============================================================
+@app.route('/admin/logs', methods=['GET'])
+def get_admin_logs():
+    """
+    관리자가 입출차 로그(GateLog)와 예약 내역(Reservation)을
+    다양한 조건으로 필터링하여 조회합니다.
+    """
+    
+    # 1. 클라이언트로부터 필터링 조건 받기 (쿼리 파라미터)
+    # 예: /admin/logs?log_type=gate&zone_id=1
+    log_type = request.args.get('log_type', 'reservation') # 'gate' 또는 'reservation'
+    zone_id = request.args.get('zone_id', type=int)
+    user_id = request.args.get('user_id')
+    status = request.args.get('status')
+    
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        query = ""
+        params = []
+
+        if log_type == 'gate':
+            # 1. GateLog 조회 (복잡한 쿼리 예시)
+            # GateLog + Reservation + ParkingSpace + ParkingZone JOIN
+            base_query = """
+                SELECT 
+                    gl.LogID, gl.Timestamp, gl.Action,
+                    r.ReservationID, r.VisitorID,
+                    pz.ZoneName, ps.SpaceID
+                FROM GateLog gl
+                JOIN Reservation r ON gl.ReservationID = r.ReservationID
+                JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+                JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+                WHERE 1=1
+            """
+            
+            # 동적 쿼리 생성 (필터 추가)
+            if zone_id:
+                base_query += " AND pz.ZoneID = %s"
+                params.append(zone_id)
+            if user_id:
+                base_query += " AND r.VisitorID = %s"
+                params.append(user_id)
+            
+            base_query += " ORDER BY gl.Timestamp DESC"
+            query = sql.SQL(base_query)
+
+        else: # 기본값: log_type == 'reservation'
+            # 2. Reservation 조회 (복잡한 쿼리 예시)
+            base_query = """
+                SELECT 
+                    r.ReservationID, r.Status, r.ReserveStartTime, r.VisitorID,
+                    pz.ZoneName, ps.SpaceID
+                FROM Reservation r
+                JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+                JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+                WHERE 1=1
+            """
+            
+            # 동적 쿼리 생성 (필터 추가)
+            if zone_id:
+                base_query += " AND pz.ZoneID = %s"
+                params.append(zone_id)
+            if user_id:
+                base_query += " AND r.VisitorID = %s"
+                params.append(user_id)
+            if status:
+                base_query += " AND r.Status = %s"
+                params.append(status)
+            
+            base_query += " ORDER BY r.ReserveStartTime DESC"
+            query = sql.SQL(base_query)
+        
+        # 3. 쿼리 실행
+        cur.execute(query, tuple(params))
+        logs = cur.fetchall()
+
+        return jsonify(log_type=log_type, count=len(logs), logs=logs), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="데이터베이스 쿼리 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
