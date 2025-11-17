@@ -413,6 +413,93 @@ def update_zone_status(zone_id):
         if conn:
             conn.close()
 
+# =========================================================
+# 10. 방문자: 입차 요청 (POST /entry-request)
+# =========================================================
+@app.route('/entry-request', methods=['POST'])
+def request_entry():
+    # 1. 클라이언트로부터 JSON 데이터 받기
+    try:
+        data = request.get_json()
+        user_id = data['UserID']
+        gate_id = data['GateID'] # 어느 게이트로 들어왔는지
+    except Exception as e:
+        return jsonify(error="잘못된 요청 데이터입니다. 'UserID'와 'GateID'가 필요합니다.", details=str(e)), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 유효한 예약 확인 (제안서 기능)
+        # "현재 시간(NOW())"에 "Pending" 상태인 "본인(user_id)"의 예약이 있는지 확인
+        query_find_reservation = sql.SQL(
+            """
+            SELECT ReservationID, Status
+            FROM Reservation
+            WHERE VisitorID = %s
+              AND Status = 'Pending'
+              AND NOW() BETWEEN ReserveStartTime AND ReserveEndTime
+            LIMIT 1;
+            """
+        )
+        cur.execute(query_find_reservation, (user_id,))
+        valid_reservation = cur.fetchone()
+
+        if not valid_reservation:
+            return jsonify(error="유효한 예약이 없습니다. (시간 확인 또는 이미 사용된 예약)"), 404 # 404: Not Found
+        
+        reservation_id = valid_reservation['reservationid']
+
+        # 3. 게이트 로그 기록 (제안서 기능)
+        # "관리자 승인 대기" 상태로 로그를 남깁니다.
+        query_insert_log = sql.SQL(
+            """
+            INSERT INTO GateLog (ReservationID, GateID, Action)
+            VALUES (%s, %s, 'Entry')
+            RETURNING LogID, Timestamp
+            """
+        )
+        cur.execute(query_insert_log, (reservation_id, gate_id))
+        new_log = cur.fetchone()
+        
+        # 4. 예약 상태를 'InUse'(이용중)로 변경
+        cur.execute(
+            sql.SQL('UPDATE Reservation SET Status = %s WHERE ReservationID = %s'),
+            ('InUse', reservation_id)
+        )
+
+        conn.commit()
+
+        return jsonify(
+            message="입차 요청이 기록되었습니다. 관리자 승인을 대기합니다.",
+            log_id=new_log['logid'],
+            reservation_id=reservation_id,
+            timestamp=new_log['timestamp']
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        # 'Pending' 예약을 못 찾았는데 'InUse' 예약을 찾은 경우 (중복 요청)
+        if e.pgcode == '23514': # (만약 Status에 CHECK 제약이 있다면)
+             return jsonify(error="이미 입차 요청(InUse) 상태입니다."), 409
+        if e.pgcode == '23503': # FK 오류
+            return jsonify(error="존재하지 않는 GateID입니다."), 404
+            
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
     app.run(debug=True)
