@@ -499,6 +499,79 @@ def request_entry():
         if conn:
             conn.close()
 
+# =========================================================
+# 11. 관리자: 입차 승인 (POST /approve-entry)
+# =========================================================
+@app.route('/approve-entry', methods=['POST'])
+def approve_entry():
+    """
+    관리자가 방문자의 입차 요청을 승인하여 게이트를 개방합니다.
+    """
+    
+    # 1. 클라이언트로부터 JSON 데이터 받기
+    try:
+        data = request.get_json()
+        reservation_id = data['ReservationID'] # 승인할 예약 ID
+        gate_id = data['GateID']               # 개방할 게이트 ID
+    except Exception as e:
+        return jsonify(error="잘못된 요청 데이터입니다. 'ReservationID'와 'GateID'가 필요합니다.", details=str(e)), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 승인할 예약이 'InUse' 상태인지 확인
+        query_check_reservation = sql.SQL(
+            "SELECT Status FROM Reservation WHERE ReservationID = %s"
+        )
+        cur.execute(query_check_reservation, (reservation_id,))
+        reservation = cur.fetchone()
+
+        if not reservation:
+            return jsonify(error="존재하지 않는 ReservationID입니다."), 404
+        
+        if reservation['status'] != 'InUse':
+            return jsonify(error="승인 대상 예약이 'InUse'(이용중/입차대기) 상태가 아닙니다.", details=f"현재 상태: {reservation['status']}"), 400
+
+        # 3. 게이트 상태를 'Open'으로 변경 (제안서 기능)
+        query_open_gate = sql.SQL(
+            """
+            UPDATE Gate SET Status = 'Open' WHERE GateID = %s
+            RETURNING GateID, GateName, Status
+            """
+        )
+        cur.execute(query_open_gate, (gate_id,))
+        opened_gate = cur.fetchone()
+
+        if not opened_gate:
+            return jsonify(error="존재하지 않는 GateID입니다."), 404
+
+        conn.commit()
+
+
+        return jsonify(
+            message="입차가 승인되었습니다. 게이트를 개방합니다.",
+            opened_gate=opened_gate
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        if e.pgcode == '23503': # FK 오류
+            return jsonify(error="존재하지 않는 ReservationID 또는 GateID입니다."), 404
+            
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
