@@ -591,7 +591,7 @@ def request_exit():
     cur = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor(factory=RealDictCursor)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # 2. 'InUse' 상태인 본인의 예약 확인
         # (출차는 아무 때나 할 수 있어야 하므로 시간(NOW()) 검사는 제외)
@@ -644,6 +644,68 @@ def request_exit():
         if e.pgcode == '23503': # FK 오류
             return jsonify(error="존재하지 않는 GateID입니다."), 404
             
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+# =============================================================
+# 13. 방문자: 예약 취소 (DELETE /reservation/<int:reservation_id>)
+# =============================================================
+@app.route('/reservation/<int:reservation_id>', methods=['DELETE'])
+def cancel_reservation(reservation_id):
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. 예약을 'Canceled' 상태로 변경
+        query_update = sql.SQL(
+            """
+            UPDATE Reservation
+            SET Status = 'Canceled'
+            WHERE ReservationID = %s
+              AND Status = 'Pending' -- 'Pending' 상태인 것만 취소 가능
+            RETURNING ReservationID, Status;
+            """
+        )
+        
+        cur.execute(query_update, (reservation_id,))
+        
+        canceled_reservation = cur.fetchone()
+        
+        # 2. 취소 성공 여부 확인
+        if not canceled_reservation:
+            # 2-1. (확인) 애초에 ID가 없는지?
+            cur.execute(sql.SQL("SELECT Status FROM Reservation WHERE ReservationID = %s"), (reservation_id,))
+            existing_reservation = cur.fetchone()
+            
+            if not existing_reservation:
+                return jsonify(error="존재하지 않는 ReservationID입니다."), 404
+            
+            # 2-2. ID는 있으나 'Pending' 상태가 아님
+            return jsonify(
+                error="예약을 취소할 수 없습니다. 'Pending'(대기) 상태의 예약만 취소 가능합니다.",
+                current_status=existing_reservation['status']
+            ), 400 # 400: Bad Request
+
+        conn.commit()
+
+        return jsonify(
+            message="예약이 성공적으로 취소되었습니다.",
+            canceled_reservation=canceled_reservation
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
         return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
     except Exception as e:
         if conn:
