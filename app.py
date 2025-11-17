@@ -348,6 +348,71 @@ def create_reservation():
         if conn:
             conn.close()
 
+# =========================================================
+# 9. 관리자: 주차 구역 상태 변경 (PUT /zone/<int:zone_id>)
+# =========================================================
+@app.route('/zone/<int:zone_id>', methods=['PUT'])
+def update_zone_status(zone_id):
+    # 1. 클라이언트로부터 JSON 데이터 받기
+    try:
+        data = request.get_json()
+        new_status = data['Status']
+    except Exception as e:
+        return jsonify(error="잘못된 요청 데이터입니다. 'Status'가 필요합니다.", details=str(e)), 400
+
+    # 2. Status 값 유효성 검사 (DB CHECK 제약 조건과 동일)
+    if new_status not in ['Available', 'Closed']:
+        return jsonify(error="Status 값은 'Available' 또는 'Closed'여야 합니다."), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 3. 구역 상태 업데이트 (UPDATE)
+        # 만약 new_status가 'Closed'라면, 이 UPDATE 명령이
+        # 'fn_cancel_reservations_on_zone_close' 트리거를 작동시킴
+        # 트리거는 이 ZoneID에 물려있는 모든 'Pending' 예약을 'Canceled'로 자동 변경한다.
+        query_update = sql.SQL(
+            """
+            UPDATE ParkingZone
+            SET Status = %s
+            WHERE ZoneID = %s
+            RETURNING ZoneID, ZoneName, Status
+            """
+        )
+        
+        cur.execute(query_update, (new_status, zone_id))
+        
+        updated_zone = cur.fetchone()
+        
+        # 4. 업데이트 성공 여부 확인
+        if not updated_zone:
+            return jsonify(error="존재하지 않는 ZoneID입니다."), 404 # 404: Not Found
+
+        conn.commit()
+
+        return jsonify(
+            message="주차 구역 상태가 성공적으로 변경되었습니다.",
+            zone=updated_zone
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        # (기타 DB 오류 처리)
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
     app.run(debug=True)
