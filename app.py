@@ -843,6 +843,70 @@ def delete_share_schedule(schedule_id):
         if conn:
             conn.close()
 
+# ===============================================================
+# 16. 방문자: 내 예약 내역 조회 (GET /my-reservations)
+# ===============================================================
+@app.route('/my-reservations', methods=['GET'])
+def get_my_reservations():    
+    # 1. 클라이언트로부터 UserID 받기 (쿼리 파라미터 사용)
+    # 예: /my-reservations?user_id=test_visitor
+    user_id = request.args.get('user_id')
+
+    if not user_id:
+        return jsonify(error="잘못된 요청입니다. 'user_id' 쿼리 파라미터가 필요합니다."), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(factory=RealDictCursor)
+
+        # 2. 해당 UserID의 모든 예약 조회
+        # (ShareSchedule, ParkingSpace, ParkingZone과 JOIN하여
+        #  구역 이름, 공간 ID 같은 상세 정보도 함께 반환)
+        query_select = sql.SQL(
+            """
+            SELECT 
+                r.ReservationID, 
+                r.Status,
+                r.ReserveStartTime, 
+                r.ReserveEndTime,
+                pz.ZoneName,
+                ps.SpaceID
+            FROM Reservation r
+            JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+            JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            WHERE 
+                r.VisitorID = %s
+            ORDER BY 
+                r.ReserveStartTime DESC; -- 최근 예약이 위로
+            """
+        )
+        
+        cur.execute(query_select, (user_id,))
+        
+        reservations = cur.fetchall()
+        
+        if not reservations:
+            return jsonify(message="예약 내역이 없습니다.", reservations=[]), 200
+
+        return jsonify(reservations=reservations), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
