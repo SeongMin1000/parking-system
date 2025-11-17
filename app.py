@@ -783,6 +783,66 @@ def update_share_schedule(schedule_id):
         if conn:
             conn.close()
 
+# ===============================================================
+# 15. 입주민: 비움 시간 삭제 (DELETE /schedule/<int:schedule_id>)
+# ===============================================================
+@app.route('/schedule/<int:schedule_id>', methods=['DELETE'])
+def delete_share_schedule(schedule_id):
+    
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 비움 시간 삭제
+        # 이 DELETE 명령이 'fn_cancel_reservations_on_schedule_change'
+        # 트리거를 작동시킵니다.
+        # 이 ShareID에 연결된 모든 'Pending' 예약이 'Canceled'로 변경됩니다.
+        query_delete = sql.SQL(
+            """
+            DELETE FROM ShareSchedule
+            WHERE ShareID = %s
+            RETURNING ShareID;
+            """
+        )
+        
+        cur.execute(query_delete, (schedule_id,))
+        
+        deleted_schedule = cur.fetchone()
+        
+        if not deleted_schedule:
+            return jsonify(error="존재하지 않는 ShareID입니다."), 404
+
+        conn.commit()
+
+        return jsonify(
+            message="비움 시간이 성공적으로 삭제되었습니다. (관련 'Pending' 예약이 자동 취소되었을 수 있습니다)",
+            deleted_schedule=deleted_schedule
+        ), 200
+
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        
+        # FK 제약 조건 위반 (23503)
+        # 만약 'InUse' 상태의 예약이 이 일정을 참조하고 있다면 발생할 수 있습니다.
+        # (DDL의 ON DELETE CASCADE가 이 문제를 해결할 수도 있지만,
+        #  트리거가 'Pending'만 처리하므로 충돌 가능성이 있습니다.)
+        if e.pgcode == '23503':
+            return jsonify(error="외래 키 제약 조건 위반: 이 일정을 참조하는 'InUse' 또는 'Completed' 예약이 존재할 수 있습니다.", details=str(e)), 409
+
+        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
 
 # --- Flask 앱 실행 ---
 if __name__ == '__main__':
