@@ -234,37 +234,50 @@ CREATE OR REPLACE FUNCTION fn_gate_access_control()
 RETURNS TRIGGER AS $$
 DECLARE
     v_reservation_id INT;
+    v_user_role VARCHAR(10);
 BEGIN
+    -- 1. 사용자 역할 확인 (입주민인지?)
+    SELECT Role INTO v_user_role FROM "User" WHERE VehicleID = NEW.VehicleID;
+
+    -- [입차 로직]
     IF NEW.Action = 'Entry' THEN
-        SELECT ReservationID INTO v_reservation_id
-        FROM Reservation
-        WHERE VisitorVehicleID = NEW.VehicleID
-          AND Status = 'Approved'
-          AND (COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP) BETWEEN ReserveStartTime AND ReserveEndTime);
         
-        IF v_reservation_id IS NOT NULL THEN
+        -- (A) 입주민이면 무조건 자동 승인
+        IF v_user_role = 'Resident' THEN
             NEW.Status := 'Automatic';
-            NEW.ReservationID := v_reservation_id;
+        
+        -- (B) 방문자면 예약 확인
         ELSE
-            NEW.Status := 'PendingApproval';
+            SELECT ReservationID INTO v_reservation_id
+            FROM Reservation
+            WHERE VisitorVehicleID = NEW.VehicleID
+              AND Status = 'Approved'
+              AND (COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP) BETWEEN ReserveStartTime AND ReserveEndTime);
+            
+            IF v_reservation_id IS NOT NULL THEN
+                NEW.Status := 'Automatic';
+                NEW.ReservationID := v_reservation_id;
+            ELSE
+                NEW.Status := 'PendingApproval'; -- 예약 없거나 시간 안 맞음
+            END IF;
         END IF;
 
+    -- [출차 로직]
     ELSIF NEW.Action = 'Exit' THEN
-        NEW.Status := 'Approved';
-        SELECT ReservationID INTO v_reservation_id
-        FROM Reservation
-        WHERE VisitorVehicleID = NEW.VehicleID AND Status = 'InUse';
-        NEW.ReservationID := v_reservation_id;
+        NEW.Status := 'Approved'; -- 출차는 항상 승인
+        
+        -- 방문자였으면 예약 상태 업데이트를 위해 ID 찾기
+        IF v_user_role = 'Visitor' THEN
+            SELECT ReservationID INTO v_reservation_id
+            FROM Reservation
+            WHERE VisitorVehicleID = NEW.VehicleID AND Status = 'InUse';
+            NEW.ReservationID := v_reservation_id;
+        END IF;
     END IF;
 
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-CREATE TRIGGER tr_gate_access_control_before
-BEFORE INSERT ON GateLog
-FOR EACH ROW
-EXECUTE FUNCTION fn_gate_access_control();
 
 -- =====================================================================
 -- 8. 로직: 게이트 통과 후 예약 상태 자동 변경 (InUse / Completed)

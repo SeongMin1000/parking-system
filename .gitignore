@@ -7,3 +7,6 @@ venv/
 # Python 캐시 파일
 __pycache__/
 *.pyc
+
+# vscode
+.vscode/
