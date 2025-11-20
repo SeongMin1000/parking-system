@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주차장 관리 시스템 - 로그인</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* 간단한 내부 스타일 (나중에 static/style.css로 분리 가능) */
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        h1 { color: #2c3e50; margin-bottom: 30px; font-size: 24px; }
+        .input-group { margin-bottom: 20px; text-align: left; }
+        label { display: block; margin-bottom: 5px; color: #666; font-size: 14px; }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box; /* padding 포함 너비 계산 */
+            font-size: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #2980b9; }
+        .links { margin-top: 20px; font-size: 14px; }
+        .links a { color: #3498db; text-decoration: none; }
+        .links a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+    <div class="login-container">
+        <h1>🚗 주차장 관리 시스템</h1>
+        <form id="loginForm">
+            <div class="input-group">
+                <label for="vehicleId">차량 번호 (ID)</label>
+                <input type="text" id="vehicleId" placeholder="예: 12가3456" required>
+            </div>
+            <div class="input-group">
+                <label for="password">비밀번호</label>
+                <input type="password" id="password" placeholder="비밀번호 입력" required>
+            </div>
+            <button type="submit">로그인</button>
+        </form>
+        <div class="links">
+            계정이 없으신가요? <a href="/register">회원가입</a><br><br>
+            <a href="/">메인 현황판 보기 (로그인 불필요)</a>
+        </div>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('loginForm');
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault(); // 폼 기본 제출 방지
+
+            const vehicleId = document.getElementById('vehicleId').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        VehicleID: vehicleId, 
+                        Password: password 
+                    }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // 로그인 성공 시
+                    alert(data.message); // "로그인 성공"
+
+                    // 1. 브라우저 세션 저장소에 사용자 정보 저장
+                    // (다른 페이지에서 API 호출할 때 VehicleID를 꺼내 쓰기 위함)
+                    sessionStorage.setItem('vehicleId', data.VehicleID);
+                    sessionStorage.setItem('role', data.Role);
+
+                    // 2. 역할(Role)에 따른 페이지 리다이렉트
+                    if (data.Role === 'Admin') {
+                        window.location.href = '/admin';
+                    } else if (data.Role === 'Resident') {
+                        window.location.href = '/resident';
+                    } else {
+                        window.location.href = '/visitor';
+                    }
+                } else {
+                    // 로그인 실패 시 (401 등)
+                    alert(data.error);
+                }
+            } catch (error) {
+                console.error('Login Error:', error);
+                alert('서버와 통신 중 오류가 발생했습니다.');
+            }
+        });
+    </script>
+</body>
+</html>

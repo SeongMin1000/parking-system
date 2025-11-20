@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주차장 실시간 현황판</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+
+        /* 상단 네비게이션 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header h1 { margin: 0; font-size: 24px; color: #2c3e50; }
+        .nav-links a {
+            text-decoration: none;
+            color: #3498db;
+            font-weight: bold;
+            margin-left: 20px;
+            padding: 8px 15px;
+            border-radius: 5px;
+            transition: 0.3s;
+        }
+        .nav-links a:hover { background-color: #eaf2f8; }
+
+        /* 범례 (Legend) */
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            background: white;
+            padding: 15px;
+            border-radius: 50px;
+            display: inline-flex;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .legend-item { display: flex; align-items: center; font-size: 14px; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        
+        /* 상태별 색상 (CSS 클래스) */
+        .status-shared { background-color: #2ecc71; } /* 예약 가능 (녹색) */
+        .status-reserved { background-color: #f39c12; } /* 예약됨 (주황) */
+        .status-external { background-color: #3498db; } /* 외부인이용중 (파랑) */
+        .status-occupied { background-color: #34495e; } /* 입주민사용중 (남색) */
+        .status-unassigned { background-color: #bdc3c7; } /* 미할당 (회색) */
+        .status-closed { background-color: #e74c3c; } /* 폐쇄 (빨강) */
+
+        /* 메인 맵 컨테이너 */
+        .map-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr); /* 2열 배치 (A,B / C,D) */
+            gap: 30px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        /* 구역 (Zone) 스타일 */
+        .zone-box {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 2px solid transparent;
+            transition: 0.3s;
+        }
+        .zone-box.closed-zone {
+            border-color: #e74c3c;
+            background-color: #fadbd8;
+        }
+        .zone-title { font-size: 20px; font-weight: bold; margin-bottom: 15px; color: #555; }
+
+        /* 주차 공간 그리드 */
+        .parking-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr); /* 한 줄에 5개씩 */
+            gap: 10px;
+        }
+
+        /* 개별 주차 칸 */
+        .space {
+            height: 60px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            color: white;
+            font-size: 14px;
+            position: relative;
+            transition: transform 0.2s;
+        }
+        .space:hover { transform: scale(1.05); }
+        .space span { z-index: 2; }
+
+        /* 미할당이나 빈 공간은 글자색 어둡게 */
+        .space.status-unassigned { color: #7f8c8d; }
+
+        /* 게이트 상태 표시 */
+        .gate-panel {
+            margin-top: 40px;
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+        }
+        .gate {
+            width: 150px;
+            padding: 15px;
+            border-radius: 10px;
+            background: #2c3e50;
+            color: white;
+            text-align: center;
+        }
+        .gate.open { background-color: #2ecc71; box-shadow: 0 0 15px #2ecc71; }
+        .gate-icon { font-size: 30px; margin-bottom: 5px; display: block; }
+
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🅿️ 아파트 주차장 현황판</h1>
+        <div class="nav-links" id="authLinks">
+            <a href="/login">로그인</a>
+            <a href="/register">회원가입</a>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><div class="dot status-shared"></div>예약 가능 (공유중)</div>
+        <div class="legend-item"><div class="dot status-reserved"></div>예약됨 (입차전)</div>
+        <div class="legend-item"><div class="dot status-external"></div>외부인 이용중</div>
+        <div class="legend-item"><div class="dot status-occupied"></div>입주민 주차중</div>
+        <div class="legend-item"><div class="dot status-unassigned"></div>미할당/일반</div>
+        <div class="legend-item"><div class="dot status-closed"></div>폐쇄/공사중</div>
+    </div>
+
+    <div class="map-container" id="mapContainer">
+        <p>데이터를 불러오는 중...</p>
+    </div>
+
+    <div class="gate-panel">
+        <div class="gate" id="gate-entry">
+            <span class="gate-icon">🚧</span>
+            정문 (입구)<br>
+            <span id="status-entry">CLOSED</span>
+        </div>
+        <div class="gate" id="gate-exit">
+            <span class="gate-icon">🚧</span>
+            후문 (출구)<br>
+            <span id="status-exit">CLOSED</span>
+        </div>
+    </div>
+
+    <script>
+        // 1. 로그인 상태 확인 및 네비게이션 업데이트
+        const vehicleId = sessionStorage.getItem('vehicleId');
+        const role = sessionStorage.getItem('role');
+        const authLinks = document.getElementById('authLinks');
+
+        if (vehicleId) {
+            let dashboardLink = '/visitor';
+            if (role === 'Resident') dashboardLink = '/resident';
+            if (role === 'Admin') dashboardLink = '/admin';
+
+            authLinks.innerHTML = `
+                <span>👋 ${vehicleId}님</span>
+                <a href="${dashboardLink}">내 대시보드</a>
+                <a href="#" onclick="logout()">로그아웃</a>
+            `;
+        }
+
+        function logout() {
+            sessionStorage.clear();
+            window.location.reload();
+        }
+
+        // 2. 주차장 데이터 가져오기 (Polling 방식: 3초마다)
+        async function fetchParkingStatus() {
+            try {
+                const response = await fetch('/parking-status');
+                const data = await response.json();
+                renderMap(data);
+            } catch (error) {
+                console.error('Error fetching status:', error);
+            }
+        }
+
+        // 맵 그리기 함수
+        function renderMap(zonesData) {
+            const container = document.getElementById('mapContainer');
+            container.innerHTML = ''; // 초기화
+
+            // 구역 이름순 정렬 (A, B, C, D...)
+            const sortedKeys = Object.keys(zonesData).sort();
+
+            sortedKeys.forEach(zoneName => {
+                const spaces = zonesData[zoneName];
+                
+                // 구역 박스 생성
+                const zoneBox = document.createElement('div');
+                zoneBox.className = 'zone-box';
+                
+                // 구역 전체가 폐쇄(Closed) 상태인지 확인 (첫 번째 칸 상태로 추측 가능)
+                if (spaces.length > 0 && spaces[0].status === 'closed') {
+                    zoneBox.classList.add('closed-zone');
+                }
+
+                const title = document.createElement('div');
+                title.className = 'zone-title';
+                title.innerText = zoneName;
+                zoneBox.appendChild(title);
+
+                // 그리드 생성
+                const grid = document.createElement('div');
+                grid.className = 'parking-grid';
+
+                spaces.forEach(space => {
+                    const cell = document.createElement('div');
+                    // CSS 클래스 매핑: status-shared, status-occupied 등
+                    cell.className = `space status-${space.status}`;
+                    cell.innerHTML = `<span>${space.num}</span>`;
+                    cell.title = `상태: ${space.status}`; // 마우스 오버 시 상태 표시
+                    grid.appendChild(cell);
+                });
+
+                zoneBox.appendChild(grid);
+                container.appendChild(zoneBox);
+            });
+        }
+
+        // 3. 게이트 상태 (Socket.IO 실시간 업데이트)
+        const socket = io();
+
+        socket.on('gate_status_changed', (data) => {
+            // data = { gate_id: 1, status: 'Open' }
+            updateGateUI(data.gate_id, data.status);
+            
+            // 게이트가 열리면 5초 뒤에 자동으로 닫히는 UI 애니메이션 (실제 DB는 안 닫혀도 시각적으로)
+            if (data.status === 'Open') {
+                setTimeout(() => {
+                    updateGateUI(data.gate_id, 'Closed');
+                }, 5000);
+            }
+        });
+
+        function updateGateUI(gateId, status) {
+            // setup_db.py 기준: 1번=Entry, 2번=Exit
+            let elementId = gateId === 1 ? 'gate-entry' : 'gate-exit';
+            let textId = gateId === 1 ? 'status-entry' : 'status-exit';
+            
+            const gateEl = document.getElementById(elementId);
+            const textEl = document.getElementById(textId);
+
+            if (status === 'Open') {
+                gateEl.classList.add('open');
+                textEl.innerText = 'OPEN';
+            } else {
+                gateEl.classList.remove('open');
+                textEl.innerText = 'CLOSED';
+            }
+        }
+
+        // 초기 실행
+        fetchParkingStatus();
+        setInterval(fetchParkingStatus, 3000); // 3초마다 갱신
+
+    </script>
+</body>
+</html>

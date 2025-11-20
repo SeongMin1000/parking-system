@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주차장 관리 시스템 - 회원가입</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* login.html과 일관된 스타일 적용 */
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .register-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 450px; /* 입력 항목이 많으므로 조금 더 넓게 */
+        }
+        h1 { color: #2c3e50; margin-bottom: 25px; text-align: center; font-size: 24px; }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; color: #666; font-size: 14px; }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        /* 읽기 전용 필드 스타일 */
+        input:disabled { background-color: #eee; cursor: not-allowed; }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #2ecc71; /* 가입 버튼은 초록색 계열 */
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #27ae60; }
+        .links { margin-top: 20px; text-align: center; font-size: 14px; }
+        .links a { color: #3498db; text-decoration: none; }
+
+        /* 입주민 전용 필드 (초기에는 숨김) */
+        #residentField { display: none; background-color: #f9f9f9; padding: 10px; border-radius: 5px; border: 1px dashed #ccc; margin-bottom: 15px; }
+        .helper-text { font-size: 12px; color: #888; margin-top: 4px; }
+    </style>
+</head>
+<body>
+
+    <div class="register-container">
+        <h1>📝 회원가입</h1>
+        <form id="registerForm">
+            <div class="input-group">
+                <label for="role">사용자 역할 (Role)</label>
+                <select id="role" required onchange="toggleResidentField()">
+                    <option value="Visitor">일반 시민 (방문객)</option>
+                    <option value="Resident">입주민 (아파트 거주자)</option>
+                    <option value="Admin">관리자 (시스템 운영)</option>
+                </select>
+            </div>
+
+            <div id="residentField">
+                <label for="building">거주 동/호수 (주차 구역 지정)</label>
+                <input type="text" id="building" placeholder="예: a-1 (A구역 1번)">
+                <div class="helper-text">※ 주차 구역(A~D)과 번호(1~10)를 '구역-번호' 형식으로 입력해주세요.</div>
+            </div>
+
+            <div class="input-group">
+                <label for="vehicleId">차량 번호 (ID)</label>
+                <input type="text" id="vehicleId" placeholder="예: 12가3456" required>
+            </div>
+
+            <div class="input-group">
+                <label for="password">비밀번호</label>
+                <input type="password" id="password" placeholder="비밀번호 입력" required>
+            </div>
+
+            <div class="input-group">
+                <label for="name">이름</label>
+                <input type="text" id="name" placeholder="사용자 이름" required>
+            </div>
+
+            <div class="input-group">
+                <label for="contact">연락처</label>
+                <input type="text" id="contact" placeholder="010-0000-0000">
+            </div>
+
+            <button type="submit">가입하기</button>
+        </form>
+        <div class="links">
+            이미 계정이 있으신가요? <a href="/login">로그인 하러 가기</a>
+        </div>
+    </div>
+
+    <script>
+        // 역할 선택에 따라 입력창 표시/숨김
+        function toggleResidentField() {
+            const role = document.getElementById('role').value;
+            const residentField = document.getElementById('residentField');
+            if (role === 'Resident') {
+                residentField.style.display = 'block';
+                document.getElementById('building').required = true; // 입주민이면 필수 입력
+            } else {
+                residentField.style.display = 'none';
+                document.getElementById('building').required = false;
+                document.getElementById('building').value = ''; // 값 초기화
+            }
+        }
+
+        const registerForm = document.getElementById('registerForm');
+
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const role = document.getElementById('role').value;
+            const building = document.getElementById('building').value;
+            const vehicleId = document.getElementById('vehicleId').value;
+            const password = document.getElementById('password').value;
+            const name = document.getElementById('name').value;
+            const contact = document.getElementById('contact').value;
+
+            const payload = {
+                Role: role,
+                VehicleID: vehicleId,
+                Password: password,
+                Name: name,
+                Contact: contact
+            };
+
+            // 입주민일 경우 Building 필드 추가
+            if (role === 'Resident') {
+                payload.Building = building;
+            }
+
+            try {
+                const response = await fetch('/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert(data.message); // "회원가입 성공!"
+                    window.location.href = '/login'; // 로그인 페이지로 이동
+                } else {
+                    // 에러 메시지 표시 (예: 이미 사용 중인 ID, 구역 없음 등)
+                    alert("가입 실패: " + data.error + (data.details ? "\n(" + data.details + ")" : ""));
+                }
+            } catch (error) {
+                console.error('Register Error:', error);
+                alert('서버 오류가 발생했습니다.');
+            }
+        });
+    </script>
+</body>
+</html>

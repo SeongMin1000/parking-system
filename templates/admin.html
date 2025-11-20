@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>관리자 대시보드 - 주차장 관리 시스템</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* 공통 스타일 */
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #2c3e50; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        /* 헤더 */
+        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 20px; color: #2c3e50; }
+        .admin-badge { background-color: #e74c3c; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px; font-weight: bold; margin-left: 10px; }
+        button.logout { background-color: #7f8c8d; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
+
+        /* 레이아웃 그리드 */
+        .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        
+        /* 카드 공통 */
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .card-header { font-size: 16px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+
+        /* 1. 승인 대기 패널 (중요) */
+        .pending-box { border-left: 5px solid #e67e22; }
+        .request-item { background-color: #fdf2e9; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+        .req-info { font-size: 14px; }
+        .req-time { color: #e67e22; font-weight: bold; }
+        .btn-approve { background-color: #2ecc71; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-approve:hover { background-color: #27ae60; }
+
+        /* 2. 구역 제어 패널 */
+        .zone-controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .zone-toggle { padding: 15px; border: 1px solid #ddd; border-radius: 8px; text-align: center; cursor: pointer; transition: 0.2s; }
+        .zone-toggle.active { background-color: #e8f8f5; border-color: #2ecc71; color: #27ae60; } /* Available */
+        .zone-toggle.closed { background-color: #fadbd8; border-color: #e74c3c; color: #c0392b; } /* Closed */
+        .zone-name { font-weight: bold; font-size: 18px; display: block; }
+        .zone-status { font-size: 12px; }
+
+        /* 3. 게이트 제어 패널 */
+        .gate-controls { display: flex; gap: 10px; }
+        .btn-force-open { flex: 1; padding: 15px; background-color: #34495e; color: white; border: none; border-radius: 5px; cursor: pointer; text-align: center; }
+        .btn-force-open:hover { background-color: #2c3e50; }
+        .btn-force-open i { display: block; font-size: 20px; margin-bottom: 5px; }
+
+        /* 4. 로그 테이블 */
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #666; }
+        .log-entry { color: #27ae60; }
+        .log-exit { color: #e67e22; }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>🛡️ 통합 관제 센터 <span class="admin-badge">ADMIN</span></h1>
+            </div>
+            <div>
+                <a href="/" target="_blank" style="text-decoration: none; color: #3498db; margin-right: 15px; font-size: 14px;">실시간 현황판 보기</a>
+                <button class="logout" onclick="logout()">로그아웃</button>
+            </div>
+        </div>
+
+        <div class="dashboard-grid">
+            <div class="card pending-box">
+                <div class="card-header">
+                    🚨 입차 승인 대기 (Pending Requests)
+                    <button onclick="loadPendingRequests()" style="font-size:12px;">새로고침</button>
+                </div>
+                <div id="pendingList">
+                    <div style="text-align:center; color:#999; padding:20px;">대기 중인 요청이 없습니다.</div>
+                </div>
+            </div>
+
+            <div>
+                <div class="card" style="margin-bottom: 20px;">
+                    <div class="card-header">🚧 구역 폐쇄/해제 통제</div>
+                    <div class="zone-controls" id="zoneList">
+                        <p>구역 정보 로딩중...</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">🚪 게이트 긴급 개방</div>
+                    <div class="gate-controls">
+                        <button class="btn-force-open" onclick="forceOpenGate(1)">
+                            <i>🔼</i> 정문 (Entry) 개방
+                        </button>
+                        <button class="btn-force-open" onclick="forceOpenGate(2)">
+                            <i>🔽</i> 후문 (Exit) 개방
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                📋 통합 로그 (최근 20건)
+                <div>
+                    <select id="logType" onchange="loadLogs()">
+                        <option value="gate">입출차 로그 (GateLog)</option>
+                        <option value="reservation">예약 이력 (Reservation)</option>
+                    </select>
+                </div>
+            </div>
+            <table id="logTable">
+                <thead>
+                    </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 0. 초기화 및 권한 체크
+        const vehicleId = sessionStorage.getItem('vehicleId');
+        const role = sessionStorage.getItem('role');
+
+        if (!vehicleId || role !== 'Admin') {
+            alert('관리자 권한이 필요합니다.');
+            window.location.href = '/login';
+        }
+
+        const socket = io();
+
+        // 초기 데이터 로드
+        loadPendingRequests();
+        loadZones();
+        loadLogs();
+
+        // 주기적 폴링 (승인 대기 목록 갱신) - 3초마다
+        setInterval(loadPendingRequests, 3000);
+
+        // ===========================
+        // 1. 입차 승인 대기 목록 로드
+        // ===========================
+        async function loadPendingRequests() {
+            try {
+                const response = await fetch('/admin/pending-requests');
+                const data = await response.json();
+                const listDiv = document.getElementById('pendingList');
+
+                if (data.requests.length === 0) {
+                    listDiv.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">대기 중인 요청이 없습니다.</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = '';
+                data.requests.forEach(req => {
+                    const time = new Date(req.timestamp).toLocaleTimeString();
+                    const div = document.createElement('div');
+                    div.className = 'request-item';
+                    div.innerHTML = `
+                        <div class="req-info">
+                            <span class="req-time">[${time}]</span><br>
+                            차량번호: <strong>${req.vehicleid}</strong> (Gate ${req.gateid})
+                        </div>
+                        <button class="btn-approve" onclick="approveRequest(${req.logid})">승인 (문 열기)</button>
+                    `;
+                    listDiv.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        // 입차 승인 실행
+        async function approveRequest(logId) {
+            if(!confirm('해당 차량의 입차를 승인하시겠습니까?')) return;
+            try {
+                const response = await fetch('/approve-entry', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ LogID: logId })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    alert(`승인 완료! ${data.opened_gate.gatename}이 열렸습니다.`);
+                    loadPendingRequests(); // 목록 갱신
+                } else {
+                    alert(data.error);
+                }
+            } catch (e) { alert('오류 발생'); }
+        }
+
+        // ===========================
+        // 2. 구역 목록 로드 및 제어
+        // ===========================
+        async function loadZones() {
+            try {
+                const response = await fetch('/zones');
+                const data = await response.json();
+                const container = document.getElementById('zoneList');
+                container.innerHTML = '';
+
+                data.zones.forEach(zone => {
+                    const div = document.createElement('div');
+                    const isClosed = zone.status === 'Closed';
+                    div.className = `zone-toggle ${isClosed ? 'closed' : 'active'}`;
+                    div.onclick = () => toggleZoneStatus(zone.zoneid, zone.status);
+                    
+                    div.innerHTML = `
+                        <span class="zone-name">${zone.zonename}</span>
+                        <span class="zone-status">${isClosed ? '⛔ 폐쇄됨 (클릭하여 해제)' : '🟢 운영중 (클릭하여 폐쇄)'}</span>
+                    `;
+                    container.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        // 구역 상태 변경 (Available <-> Closed)
+        async function toggleZoneStatus(zoneId, currentStatus) {
+            const newStatus = currentStatus === 'Available' ? 'Closed' : 'Available';
+            const actionName = newStatus === 'Closed' ? '폐쇄' : '해제(운영재개)';
+            
+            if(!confirm(`정말로 구역 상태를 '${actionName}' 하시겠습니까?\n(폐쇄 시 관련 예약이 모두 취소될 수 있습니다)`)) return;
+
+            try {
+                const response = await fetch(`/zone/${zoneId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ Status: newStatus })
+                });
+                if (response.ok) {
+                    alert('상태가 변경되었습니다.');
+                    loadZones(); // UI 갱신
+                } else {
+                    alert('변경 실패');
+                }
+            } catch (e) { alert('오류 발생'); }
+        }
+
+        // ===========================
+        // 3. 게이트 강제 개방
+        // ===========================
+        async function forceOpenGate(gateId) {
+            if(!confirm(`Gate ${gateId}번을 강제로 개방하시겠습니까?`)) return;
+            try {
+                const response = await fetch(`/gate/${gateId}/open`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ AdminVehicleID: vehicleId })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    alert('게이트 개방 명령을 전송했습니다.');
+                } else {
+                    alert(data.error);
+                }
+            } catch (e) { alert('오류 발생'); }
+        }
+
+        // ===========================
+        // 4. 로그 조회
+        // ===========================
+        async function loadLogs() {
+            const type = document.getElementById('logType').value;
+            const tableHead = document.querySelector('#logTable thead');
+            const tableBody = document.querySelector('#logTable tbody');
+            
+            // 헤더 설정
+            if (type === 'gate') {
+                tableHead.innerHTML = '<tr><th>시간</th><th>차량번호</th><th>행동</th><th>상태</th><th>게이트</th></tr>';
+            } else {
+                tableHead.innerHTML = '<tr><th>예약시간</th><th>방문자</th><th>구역</th><th>상태</th></tr>';
+            }
+
+            try {
+                const response = await fetch(`/admin/logs?log_type=${type}`);
+                const data = await response.json();
+                
+                tableBody.innerHTML = '';
+                // 최근 20개만 자르기 (실제로는 서버에서 LIMIT하는게 좋음)
+                const logs = data.logs.slice(0, 20);
+
+                logs.forEach(log => {
+                    const tr = document.createElement('tr');
+                    if (type === 'gate') {
+                        const actionClass = log.action === 'Entry' ? 'log-entry' : 'log-exit';
+                        tr.innerHTML = `
+                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                            <td>${log.vehicleid}</td>
+                            <td class="${actionClass}"><strong>${log.action}</strong></td>
+                            <td>${log.status}</td>
+                            <td>Gate ${log.gateid}</td>
+                        `;
+                    } else {
+                        tr.innerHTML = `
+                            <td>${new Date(log.reservestarttime).toLocaleString()}</td>
+                            <td>${log.visitorvehicleid}</td>
+                            <td>${log.zonename || '-'}</td>
+                            <td>${log.status}</td>
+                        `;
+                    }
+                    tableBody.appendChild(tr);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        function logout() {
+            sessionStorage.clear();
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

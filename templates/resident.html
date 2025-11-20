@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>입주민 대시보드 - 주차장 관리 시스템</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1, h2 { margin: 0; color: #2c3e50; }
+        button.logout { background-color: #e74c3c; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
+        .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .card-title { font-size: 18px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 20px; color: #34495e; }
+        .my-space-info { background-color: #e8f6f3; border: 1px solid #d1f2eb; padding: 15px; border-radius: 8px; color: #16a085; font-weight: bold; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
+        .space-number { font-size: 24px; color: #0e6251; }
+        .schedule-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; background: #f8f9fa; padding: 15px; border-radius: 8px; }
+        .input-group { display: flex; flex-direction: column; }
+        label { font-size: 12px; color: #666; margin-bottom: 5px; }
+        input, select { padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+        button.primary { background-color: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; height: 38px; }
+        button.primary:hover { background-color: #2980b9; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #666; }
+        .status-badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .status-active { background-color: #e8f8f5; color: #2ecc71; }
+        .status-expired { background-color: #f2f3f4; color: #95a5a6; }
+        .btn-delete { background-color: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .btn-delete:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <div>
+                <h2 id="welcomeMsg">환영합니다</h2>
+                <div style="font-size: 14px; color: #666; margin-top: 5px;">입주민(Resident) 대시보드</div>
+            </div>
+            <div>
+                <a href="/" style="text-decoration: none; color: #3498db; margin-right: 15px; font-size: 14px;">메인 현황판 가기</a>
+                <button class="logout" onclick="logout()">로그아웃</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">🏠 내 주차 공간 정보</div>
+            <div id="mySpaceContainer">
+                <p>정보를 불러오는 중...</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📅 비움 시간 등록 (주차장 공유)</div>
+            <div class="schedule-form">
+                <div class="input-group">
+                    <label>비움 시작</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="date" id="startDate" style="width: 140px;">
+                        <select id="startTime" style="width: 100px;"></select>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>비움 종료</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="date" id="endDate" style="width: 140px;">
+                        <select id="endTime" style="width: 100px;"></select>
+                    </div>
+                </div>
+                <button class="primary" onclick="registerSchedule()">등록하기</button>
+            </div>
+            <p style="font-size: 13px; color: #888; margin-top: 10px;">
+                ※ 등록한 시간 동안에는 일반 시민이 내 공간을 예약하여 사용할 수 있습니다.<br>
+                ※ '분' 단위 설정은 불가능하며 정각(00분) 단위로만 설정됩니다.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📋 나의 공유 내역 관리</div>
+            <table id="shareHistoryTable">
+                <thead>
+                    <tr>
+                        <th>공유 기간</th>
+                        <th>상태</th>
+                        <th>예약 여부</th> 
+                        <th>관리</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 0. 초기화 및 인증 체크
+        const vehicleId = sessionStorage.getItem('vehicleId');
+        const role = sessionStorage.getItem('role');
+        let mySpaceId = null;
+
+        if (!vehicleId || role !== 'Resident') {
+            alert('로그인이 필요하거나 접근 권한이 없습니다.');
+            window.location.href = '/login';
+        }
+        document.getElementById('welcomeMsg').innerText = `${vehicleId}님, 환영합니다!`;
+
+        // [핵심 수정] 시차 변환 없이(UTC 숫자 그대로) 보여주는 함수
+        function formatTimeRaw(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            
+            // 브라우저가 'GMT' 문자열을 보고 +9시간 하는 것을 방지하기 위해 UTC 메서드로 원본 숫자만 추출
+            const year = date.getUTCFullYear();
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(date.getUTCDate()).padStart(2, '0');
+            const hour = String(date.getUTCHours()).padStart(2, '0');
+            const min = String(date.getUTCMinutes()).padStart(2, '0');
+            
+            return `${year}.${month}.${day} ${hour}:${min}`;
+        }
+
+        // 초기 로드
+        loadMySpace();
+        loadShareHistory();
+        initDateTimeFields();
+
+        // =======================
+        // UI 초기화: 날짜/시간 필드
+        // =======================
+        function initDateTimeFields() {
+            // 1. 시간 옵션 생성 (00:00 ~ 23:00)
+            function populateTimeOptions(selectId) {
+                const select = document.getElementById(selectId);
+                select.innerHTML = '';
+                for (let i = 0; i < 24; i++) {
+                    const hour = i.toString().padStart(2, '0');
+                    const option = document.createElement('option');
+                    option.value = `${hour}:00`;
+                    option.text = `${hour}:00`;
+                    select.appendChild(option);
+                }
+            }
+            populateTimeOptions('startTime');
+            populateTimeOptions('endTime');
+
+            // 2. 날짜 초기값 (오늘)
+            const today = new Date();
+            // 한국 시간대 기준 날짜 문자열 생성
+            const offset = today.getTimezoneOffset() * 60000; 
+            const localDate = new Date(today.getTime() - offset);
+            const dateString = localDate.toISOString().slice(0, 10); // YYYY-MM-DD
+            
+            document.getElementById('startDate').value = dateString;
+            document.getElementById('endDate').value = dateString;
+            
+            // 3. 시간 초기값 (다음 정각)
+            let currentHour = today.getHours() + 1;
+            if(currentHour > 23) currentHour = 23;
+            
+            document.getElementById('startTime').value = `${currentHour.toString().padStart(2,'0')}:00`;
+            
+            let endHour = currentHour + 4;
+            if(endHour > 23) endHour = 23;
+            document.getElementById('endTime').value = `${endHour.toString().padStart(2,'0')}:00`;
+        }
+
+        // =======================
+        // 1. 내 주차 공간 조회
+        // =======================
+        async function loadMySpace() {
+            try {
+                const response = await fetch(`/my-spaces?vehicle_id=${vehicleId}`);
+                const data = await response.json();
+                const container = document.getElementById('mySpaceContainer');
+
+                if (data.spaces && data.spaces.length > 0) {
+                    const space = data.spaces[0];
+                    mySpaceId = space.spaceid; 
+
+                    container.innerHTML = `
+                        <div class="my-space-info">
+                            <div>
+                                <span>지정 구역</span><br>
+                                <span class="space-number">${space.zonename} - ${space.spacenumber}번</span>
+                            </div>
+                            <div>
+                                <span>현재 구역 상태</span><br>
+                                <strong>${space.zonestatus}</strong>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    container.innerHTML = `<div style="color:red;">할당된 주차 공간이 없습니다.</div>`;
+                }
+            } catch (error) { console.error(error); }
+        }
+
+        // =======================
+        // 2. 비움 시간 등록
+        // =======================
+        async function registerSchedule() {
+            if (!mySpaceId) { alert('주차 공간 정보 없음'); return; }
+
+            const startDate = document.getElementById('startDate').value;
+            const startTime = document.getElementById('startTime').value;
+            const endDate = document.getElementById('endDate').value;
+            const endTime = document.getElementById('endTime').value;
+
+            if (!startDate || !startTime || !endDate || !endTime) {
+                alert("날짜와 시간을 모두 선택해주세요.");
+                return;
+            }
+
+            const startDateTime = `${startDate}T${startTime}`;
+            const endDateTime = `${endDate}T${endTime}`;
+
+            if (startDateTime >= endDateTime) {
+                alert('종료 시간은 시작 시간보다 늦어야 합니다.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        VehicleID: vehicleId,
+                        SpaceID: mySpaceId,
+                        ShareStartTime: startDateTime,
+                        ShareEndTime: endDateTime
+                    })
+                });
+                
+                const data = await response.json();
+                if (response.ok) {
+                    alert(data.message);
+                    loadShareHistory();
+                } else {
+                    alert(`등록 실패: ${data.error}`);
+                }
+            } catch (error) { alert('서버 통신 오류'); }
+        }
+
+        // =======================
+        // 3. 공유 내역 조회 (시간 표시 수정됨)
+        // =======================
+        async function loadShareHistory() {
+            try {
+                const response = await fetch(`/my-shares?vehicle_id=${vehicleId}`);
+                const data = await response.json();
+                const tbody = document.querySelector('#shareHistoryTable tbody');
+                tbody.innerHTML = '';
+
+                if (!data.shares || data.shares.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">등록된 공유 일정이 없습니다.</td></tr>';
+                    return;
+                }
+
+                data.shares.forEach(item => {
+                    // [수정됨] toLocaleString() 대신 커스텀 포맷터 사용 -> +9시간 문제 해결
+                    const displayStart = formatTimeRaw(item.sharestarttime);
+                    const displayEnd = formatTimeRaw(item.shareendtime);
+                    
+                    // 종료 여부 확인용 객체 (비교용이므로 시차 상관없음)
+                    const endDateObj = new Date(item.shareendtime);
+                    const nowTime = new Date();
+
+                    let statusClass = 'status-active';
+                    let statusText = '공유 중';
+                    if (endDateObj < nowTime) {
+                        statusClass = 'status-expired';
+                        statusText = '종료됨';
+                    }
+
+                    const canDelete = item.is_deletable; 
+                    
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${displayStart} <br>~ ${displayEnd}</td>
+                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                        <td>${canDelete ? '없음(대기중)' : '<span style="color:blue; font-weight:bold;">예약됨</span>'}</td>
+                        <td>
+                            <button class="btn-delete" 
+                                onclick="deleteSchedule(${item.shareid})" 
+                                ${!canDelete ? 'disabled title="이용 중인 예약이 있어 삭제할 수 없습니다"' : ''}>
+                                삭제
+                            </button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+            } catch (error) { console.error(error); }
+        }
+
+        // =======================
+        // 4. 공유 일정 삭제
+        // =======================
+        async function deleteSchedule(shareId) {
+            if(!confirm('이 공유 일정을 삭제하시겠습니까?')) return;
+            try {
+                const response = await fetch(`/schedule/${shareId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    alert('삭제되었습니다.');
+                    loadShareHistory();
+                } else {
+                    alert(`삭제 실패: ${data.error}`);
+                }
+            } catch (error) { alert('오류 발생'); }
+        }
+
+        function logout() {
+            sessionStorage.clear();
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

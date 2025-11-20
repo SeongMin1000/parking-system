@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>방문자 대시보드 - 주차장 관리 시스템</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* 공통 스타일 */
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        
+        /* 헤더 */
+        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1, h2 { margin: 0; color: #2c3e50; }
+        button.logout { background-color: #e74c3c; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
+
+        /* 카드 스타일 */
+        .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .card-title { font-size: 18px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 20px; color: #34495e; }
+
+        /* 검색 폼 (수정됨) */
+        .search-box { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap; background-color: #f8f9fa; padding: 15px; border-radius: 8px; }
+        .input-group { display: flex; flex-direction: column; }
+        label { font-size: 12px; color: #666; margin-bottom: 5px; }
+        input, select { padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+        
+        button.primary { background-color: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; height: 38px; }
+        button.primary:hover { background-color: #2980b9; }
+
+        /* 리스트/테이블 */
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #666; }
+        .status-badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .status-Approved { background-color: #e8f8f5; color: #2ecc71; }
+        .status-Pending { background-color: #fef9e7; color: #f1c40f; }
+        .status-InUse { background-color: #eaf2f8; color: #3498db; }
+        .status-Completed { background-color: #f2f3f4; color: #7f8c8d; }
+        
+        /* 버튼들 */
+        .btn-reserve { background-color: #2ecc71; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .btn-cancel { background-color: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+
+        /* 게이트 시뮬레이션 패널 */
+        .gate-simulation { background-color: #2c3e50; color: white; }
+        .gate-simulation .card-title { color: #ecf0f1; border-color: #34495e; }
+        .gate-controls { display: flex; gap: 20px; justify-content: center; margin-top: 20px; }
+        .gate-btn { padding: 15px 30px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; transition: transform 0.1s; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+        .gate-btn:active { transform: scale(0.95); }
+        .btn-entry { background-color: #27ae60; color: white; }
+        .btn-exit { background-color: #e67e22; color: white; }
+        .gate-note { text-align: center; font-size: 13px; color: #bdc3c7; margin-top: 15px; }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <div>
+                <h2 id="welcomeMsg">환영합니다</h2>
+                <div style="font-size: 14px; color: #666; margin-top: 5px;">방문자(Visitor) 대시보드</div>
+            </div>
+            <div>
+                <a href="/" style="text-decoration: none; color: #3498db; margin-right: 15px; font-size: 14px;">메인 현황판 가기</a>
+                <button class="logout" onclick="logout()">로그아웃</button>
+            </div>
+        </div>
+
+        <div class="card gate-simulation">
+            <div class="card-title">🚗 게이트 입출차 시뮬레이션</div>
+            <div class="gate-controls">
+                <button class="gate-btn btn-entry" onclick="requestEntry()">
+                    <span>📥 입차 요청</span>
+                    <small>(Gate 1: 정문)</small>
+                </button>
+                <button class="gate-btn btn-exit" onclick="requestExit()">
+                    <span>📤 출차 요청</span>
+                    <small>(Gate 2: 후문)</small>
+                </button>
+            </div>
+            <div class="gate-note">
+                ※ 실제로는 카메라가 차량 번호를 인식하여 자동으로 수행되는 동작입니다.<br>
+                버튼을 누르면 본인의 차량 번호로 신호를 보냅니다.
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">🔍 주차 공간 검색 및 예약</div>
+            <div class="search-box">
+                <div class="input-group">
+                    <label>시작 시간</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="date" id="startDate" style="width: 130px;">
+                        <select id="startTime" style="width: 90px;"></select>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>종료 시간</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="date" id="endDate" style="width: 130px;">
+                        <select id="endTime" style="width: 90px;"></select>
+                    </div>
+                </div>
+                <button class="primary" onclick="searchSpaces()">검색</button>
+            </div>
+            
+            <table id="resultsTable">
+                <thead>
+                    <tr>
+                        <th>구역/번호</th>
+                        <th>공유 시간대</th>
+                        <th>상태</th>
+                        <th>작업</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="4" style="text-align:center;">시간을 입력하고 검색 버튼을 눌러주세요.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📋 내 예약 내역</div>
+            <table id="myReservationsTable">
+                <thead>
+                    <tr>
+                        <th>구역</th>
+                        <th>예약 시간</th>
+                        <th>상태</th>
+                        <th>작업</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 0. 초기화 및 인증 체크
+        const vehicleId = sessionStorage.getItem('vehicleId');
+        const role = sessionStorage.getItem('role');
+
+        if (!vehicleId || role !== 'Visitor') {
+            alert('로그인이 필요하거나 접근 권한이 없습니다.');
+            window.location.href = '/login';
+        }
+        document.getElementById('welcomeMsg').innerText = `${vehicleId}님, 환영합니다!`;
+
+        // [핵심] 시차 변환 없이(UTC 숫자 그대로) 보여주는 함수
+        function formatTimeRaw(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            
+            const year = date.getUTCFullYear();
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(date.getUTCDate()).padStart(2, '0');
+            const hour = String(date.getUTCHours()).padStart(2, '0');
+            const min = String(date.getUTCMinutes()).padStart(2, '0');
+            
+            return `${year}.${month}.${day} ${hour}:${min}`;
+        }
+
+        // 초기 로드
+        initDateTimeFields();
+        loadMyReservations();
+
+        // =======================
+        // UI 초기화: 날짜/시간 필드
+        // =======================
+        function initDateTimeFields() {
+            // 1. 시간 옵션 생성
+            function populateTimeOptions(selectId) {
+                const select = document.getElementById(selectId);
+                select.innerHTML = '';
+                for (let i = 0; i < 24; i++) {
+                    const hour = i.toString().padStart(2, '0');
+                    const option = document.createElement('option');
+                    option.value = `${hour}:00`;
+                    option.text = `${hour}:00`;
+                    select.appendChild(option);
+                }
+            }
+            populateTimeOptions('startTime');
+            populateTimeOptions('endTime');
+
+            // 2. 날짜/시간 초기값 (현재 시간 기준)
+            const today = new Date();
+            const offset = today.getTimezoneOffset() * 60000; 
+            const localDate = new Date(today.getTime() - offset);
+            const dateString = localDate.toISOString().slice(0, 10);
+            
+            document.getElementById('startDate').value = dateString;
+            document.getElementById('endDate').value = dateString;
+            
+            let currentHour = today.getHours() + 1;
+            if(currentHour > 23) currentHour = 23;
+            document.getElementById('startTime').value = `${currentHour.toString().padStart(2,'0')}:00`;
+            
+            let endHour = currentHour + 1; // 방문자는 기본 1시간 예약 추천
+            if(endHour > 23) endHour = 23;
+            document.getElementById('endTime').value = `${endHour.toString().padStart(2,'0')}:00`;
+        }
+
+
+        // =======================
+        // 1. 주차 공간 검색 (수정됨)
+        // =======================
+        async function searchSpaces() {
+            const sDate = document.getElementById('startDate').value;
+            const sTime = document.getElementById('startTime').value;
+            const eDate = document.getElementById('endDate').value;
+            const eTime = document.getElementById('endTime').value;
+
+            if (!sDate || !sTime || !eDate || !eTime) {
+                alert("날짜와 시간을 모두 선택해주세요."); return;
+            }
+
+            // 문자열 합치기 (YYYY-MM-DDTHH:mm)
+            const start = `${sDate}T${sTime}`;
+            const end = `${eDate}T${eTime}`;
+
+            if (start >= end) {
+                alert('종료 시간은 시작 시간보다 늦어야 합니다.');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/spaces?start_time=${start}&end_time=${end}`);
+                const data = await response.json();
+                const tbody = document.querySelector('#resultsTable tbody');
+                tbody.innerHTML = '';
+
+                if (!data.available_spaces || data.available_spaces.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">조건에 맞는 공간이 없습니다.</td></tr>';
+                    return;
+                }
+
+                data.available_spaces.forEach(space => {
+                    // 검색 결과 리스트에는 공유자가 올려둔 전체 시간을 표시
+                    const shareStart = formatTimeRaw(space.sharestarttime);
+                    const shareEnd = formatTimeRaw(space.shareendtime);
+
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><strong>${space.zonename} - ${space.spacenumber}번</strong></td>
+                        <td>${shareStart} <br>~ ${shareEnd}</td>
+                        <td><span class="status-badge status-Approved">예약 가능</span></td>
+                        <td>
+                            <button class="btn-reserve" onclick="makeReservation(${space.shareid})">예약하기</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+            } catch (error) {
+                console.error(error);
+                alert('검색 중 오류가 발생했습니다.');
+            }
+        }
+
+        // =======================
+        // 2. 예약 생성 (수정됨)
+        // =======================
+        async function makeReservation(shareId) {
+            // 예약할 때는 검색창에 입력된 그 시간 그대로 요청
+            const sDate = document.getElementById('startDate').value;
+            const sTime = document.getElementById('startTime').value;
+            const eDate = document.getElementById('endDate').value;
+            const eTime = document.getElementById('endTime').value;
+
+            const start = `${sDate}T${sTime}`;
+            const end = `${eDate}T${eTime}`;
+
+            if(!confirm(`선택한 시간(${start} ~ ${end})으로 예약하시겠습니까?`)) return;
+
+            try {
+                const response = await fetch('/reservation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        VehicleID: vehicleId,
+                        ShareID: shareId,
+                        ReserveStartTime: start,
+                        ReserveEndTime: end
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert(data.message);
+                    loadMyReservations(); 
+                    searchSpaces(); 
+                } else {
+                    alert(`예약 실패: ${data.error}\n(${data.details || ''})`);
+                }
+            } catch (error) {
+                alert('서버 오류 발생');
+            }
+        }
+
+        // =======================
+        // 3. 내 예약 목록 조회
+        // =======================
+        async function loadMyReservations() {
+            try {
+                const response = await fetch(`/my-reservations?vehicle_id=${vehicleId}`);
+                const data = await response.json();
+                const tbody = document.querySelector('#myReservationsTable tbody');
+                tbody.innerHTML = '';
+
+                if (!data.reservations || data.reservations.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">예약 내역이 없습니다.</td></tr>';
+                    return;
+                }
+
+                data.reservations.forEach(res => {
+                    const start = formatTimeRaw(res.reservestarttime);
+                    const end = formatTimeRaw(res.reserveendtime);
+                    
+                    const canCancel = res.status === 'Approved';
+
+                    const tr = document.createElement('tr');
+                    
+                    // [수정] res.zonename 뒤에 res.spacenumber 추가
+                    tr.innerHTML = `
+                        <td><strong>${res.zonename} - ${res.spacenumber}번</strong></td>
+                        <td>${start} ~ ${end}</td>
+                        <td><span class="status-badge status-${res.status}">${res.status}</span></td>
+                        <td>
+                            ${canCancel ? `<button class="btn-cancel" onclick="cancelReservation(${res.reservationid})">취소</button>` : '-'}
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) { console.error(error); }
+        }
+
+        // =======================
+        // 4. 예약 취소
+        // =======================
+        async function cancelReservation(reservationId) {
+            if(!confirm('정말로 예약을 취소하시겠습니까?')) return;
+
+            try {
+                const response = await fetch(`/reservation/${reservationId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert('취소되었습니다.');
+                    loadMyReservations();
+                } else {
+                    alert(data.error);
+                }
+            } catch (error) { alert('오류 발생'); }
+        }
+
+        // =======================
+        // 5. 입차 요청
+        // =======================
+        async function requestEntry() {
+            try {
+                const response = await fetch('/entry-request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ VehicleID: vehicleId, GateID: 1 })
+                });
+                const data = await response.json();
+
+                if (response.status === 200) {
+                    alert(`✅ [자동 승인] 게이트가 열렸습니다!\n메시지: ${data.message}`);
+                } else if (response.status === 202) {
+                    alert(`⏳ [승인 대기] 예약 시간 외 또는 예약 없음.\n관리자에게 승인 요청을 보냈습니다.`);
+                } else {
+                    alert(`⛔ [입차 거부] ${data.error}`);
+                }
+            } catch (error) { alert('통신 오류'); }
+        }
+
+        // =======================
+        // 6. 출차 요청
+        // =======================
+        async function requestExit() {
+            try {
+                const response = await fetch('/exit-request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ VehicleID: vehicleId, GateID: 2 })
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert(`👋 [출차 완료] 안녕히 가세요!\n게이트가 열렸습니다.`);
+                    loadMyReservations(); 
+                } else {
+                    alert(`❌ 출차 실패: ${data.error}`);
+                }
+            } catch (error) { alert('통신 오류'); }
+        }
+
+        function logout() {
+            sessionStorage.clear();
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>
