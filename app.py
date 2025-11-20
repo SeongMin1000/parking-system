@@ -1,6 +1,9 @@
 import os
+import re
+from datetime import datetime, timedelta, timezone
 import psycopg2
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
+from flask_socketio import SocketIO
 from dotenv import load_dotenv
 import bcrypt
 from psycopg2 import sql
@@ -10,10 +13,10 @@ from psycopg2.extras import RealDictCursor
 load_dotenv()
 
 app = Flask(__name__)
+socketio = SocketIO(app)
 
 # --- 데이터베이스 연결 설정 ---
 def get_db_connection():
-    """PostgreSQL 데이터베이스에 연결합니다."""
     conn = psycopg2.connect(
         dbname=os.getenv('DB_NAME'),
         user=os.getenv('DB_USER'),
@@ -23,1050 +26,695 @@ def get_db_connection():
     )
     return conn
 
+# --- 페이지 렌더링 라우트 ---
 @app.route('/')
-def index():
-    return "Flask 서버가 정상적으로 실행 중입니다!"
+def index(): return render_template('index.html')
+@app.route('/resident')
+def resident_page(): return render_template('resident.html')
+@app.route('/visitor')
+def visitor_page(): return render_template('visitor.html')
+@app.route('/admin')
+def admin_page(): return render_template('admin.html')
+@app.route('/login')
+def login_page(): return render_template('login.html')
+@app.route('/register')
+def register_page(): return render_template('register.html')
+
 
 # ========================================
-# 사용자 회원가입 API (POST /register)
+# 1. 사용자 회원가입 (POST /register)
 # ========================================
 @app.route('/register', methods=['POST'])
 def register_user():
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        userid = data['UserID']
+        vehicleid = data['VehicleID']
         password = data['Password']
         name = data['Name']
         role = data['Role']
-        contact = data.get('Contact') # Contact는 선택 사항일 수 있음
+        contact = data.get('Contact')
+        building = data.get('Building') if role == 'Resident' else None
     except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. UserID, Password, Name, Role이 필요합니다.", details=str(e)), 400
+        return jsonify(error="데이터 누락", details=str(e)), 400
 
-    # 2. 비밀번호 해시 (bcrypt 사용)
-    # 비밀번호를 바이트로 인코딩하고 해시 처리
+    # 차량번호 정규식 검사
+    if not re.match(r'^\d{2}[가-힣]\d{4}$', vehicleid):
+        return jsonify(error="차량번호 형식이 올바르지 않습니다. (예: 12가3456)"), 400
+
+    if role == 'Resident' and not building:
+        return jsonify(error="입주민은 거주 정보(예: a-1)를 입력해야 합니다."), 400
+
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
     conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor() 
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 3. SQL INSERT 실행
-        query = sql.SQL(
-            """
-            INSERT INTO "User" (UserID, Password, Name, Role, Contact)
-            VALUES (%s, %s, %s, %s, %s)
-            """
+        # DB 트리거(tr_assign_specific_space)가 자동으로 주차 공간을 할당하거나 에러를 발생시킴
+        cur.execute(
+            'INSERT INTO "User" (VehicleID, Password, Name, Role, Contact, Building) VALUES (%s, %s, %s, %s, %s, %s)',
+            (vehicleid, hashed_password.decode('utf-8'), name, role, contact, building)
         )
-        
-        # 4. 데이터베이스에 저장
-        cur.execute(query, (userid, hashed_password.decode('utf-8'), name, role, contact))
-        
-        # 5. 변경사항 커밋
-        conn.commit()
 
-        return jsonify(message="회원가입에 성공했습니다.", UserID=userid), 201 # 201: Created
+        conn.commit()
+        return jsonify(message="회원가입 성공!", VehicleID=vehicleid), 201
 
     except psycopg2.Error as e:
-        # 6. 오류 처리
-        if conn:
-            conn.rollback() # 오류 발생 시 변경사항 롤백
-            
-        # UserID 중복 오류 (unique_violation)
+        if conn: conn.rollback()
+        if e.pgcode == 'P0001': # 트리거에서 발생시킨 사용자 정의 에러
+            return jsonify(error="주차 공간 할당 실패", details=e.diag.message_primary), 400
         if e.pgcode == '23505':
-            return jsonify(error="이미 사용 중인 UserID입니다.", UserID=userid), 409 # 409: Conflict
-        
-        # CHECK 제약 조건 위반 (예: Role이 'Resident' 등이 아님)
-        if e.pgcode == '23514':
-            return jsonify(error="Role 값이 유효하지 않습니다. ('Resident', 'Visitor', 'Admin' 중 하나여야 합니다.)"), 400
-
-        # 그 외 DB 오류
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e)), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+            return jsonify(error="이미 가입된 차량번호입니다."), 409
+        return jsonify(error="데이터베이스 오류", details=str(e)), 500
     finally:
-        # 7. 연결 종료
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 # ==================================
-# 사용자 로그인 API (POST /login)
+# 2. 사용자 로그인 (POST /login)
 # ==================================
 @app.route('/login', methods=['POST'])
 def login_user():
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        userid = data['UserID']
+        vehicleid = data['VehicleID']
         password = data['Password']
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. UserID와 Password가 필요합니다.", details=str(e)), 400
+    except:
+        return jsonify(error="요청 데이터 부족"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 사용자 ID로 DB에서 사용자 정보 조회
-        query = sql.SQL('SELECT * FROM "User" WHERE UserID = %s')
-        cur.execute(query, (userid,))
-        
+        cur.execute('SELECT * FROM "User" WHERE VehicleID = %s', (vehicleid,))
         user = cur.fetchone()
 
-        # 3. 사용자 존재 여부 확인
-        if not user:
-            # ID가 존재하지 않음
-            return jsonify(error="아이디 또는 비밀번호가 잘못되었습니다."), 401 # 401: Unauthorized
-
-        # 4. 비밀번호 비교 (bcrypt)
-        # user['password'] : DB에 저장된 해시값 (문자열)
-        # password : 사용자가 방금 입력한 평문 비밀번호 (문자열)
-        
-        # .encode('utf-8') : 비교를 위해 두 값 모두 바이트로 변환
-        if bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
-            return jsonify(
-                message="로그인 성공!",
-                UserID=user['userid'],
-                Role=user['role']
-            ), 200
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
+            return jsonify(message="로그인 성공", VehicleID=user['vehicleid'], Role=user['role']), 200
         else:
-            # 비밀번호 불일치
-            return jsonify(error="아이디 또는 비밀번호가 잘못되었습니다."), 401
-
-    except psycopg2.Error as e:
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e)), 500
-    except Exception as e:
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+            return jsonify(error="아이디 또는 비밀번호 불일치"), 401
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================
-# 6. 입주민: 비움 시간(공유) 등록 (POST /schedule)
+# 3. 입주민: 비움 시간 등록 (POST /schedule)
 # ===============================================
 @app.route('/schedule', methods=['POST'])
 def create_share_schedule():
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        user_id = data['UserID'] # 요청자가 누구인지
-        space_id = data['SpaceID']
-        start_time = data['ShareStartTime'] # 예: "2025-11-10 14:00:00"
-        end_time = data['ShareEndTime']     # 예: "2025-11-10 18:00:00"
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. UserID, SpaceID, ShareStartTime, ShareEndTime이 필요합니다.", details=str(e)), 400
+        vehicle_id, space_id, start_time, end_time = data['VehicleID'], data['SpaceID'], data['ShareStartTime'], data['ShareEndTime']
+    except: return jsonify(error="데이터 누락"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 2. 본인 소유 공간 검증
-        # 요청한 SpaceID가 요청한 UserID(입주민)의 소유가 맞는지 확인
-        query_check_owner = sql.SQL('SELECT OwnerID FROM ParkingSpace WHERE SpaceID = %s')
-        cur.execute(query_check_owner, (space_id,))
+        # 소유주 확인
+        cur.execute('SELECT OwnerVehicleID FROM ParkingSpace WHERE SpaceID = %s', (space_id,))
         space = cur.fetchone()
+        if not space or space['ownervehicleid'] != vehicle_id:
+            return jsonify(error="본인의 주차 공간만 등록할 수 있습니다."), 403
 
-        if not space:
-            return jsonify(error="존재하지 않는 주차 공간(SpaceID)입니다."), 404 # 404: Not Found
-        
-        if space['ownerid'] != user_id:
-            return jsonify(error="해당 주차 공간의 소유주가 아닙니다. (접근 거부)"), 403 # 403: Forbidden
-
-        # 3. 비움 시간 등록 (INSERT)
-        query_insert = sql.SQL(
-            """
-            INSERT INTO ShareSchedule (SpaceID, ShareStartTime, ShareEndTime)
-            VALUES (%s, %s, %s)
-            RETURNING ShareID
-            """
-            # RETURNING ShareID: 방금 생성된 ShareID 값을 반환받음
+        # 일정 등록
+        cur.execute(
+            "INSERT INTO ShareSchedule (SpaceID, ShareStartTime, ShareEndTime) VALUES (%s, %s, %s) RETURNING ShareID",
+            (space_id, start_time, end_time)
         )
-        cur.execute(query_insert, (space_id, start_time, end_time))
-        
-        new_schedule = cur.fetchone()
+        new_id = cur.fetchone()['shareid']
         conn.commit()
-
-        return jsonify(
-            message="비움 시간이 성공적으로 등록되었습니다.",
-            new_share_id=new_schedule['shareid']
-        ), 201
+        return jsonify(message="등록되었습니다.", new_share_id=new_id), 201
 
     except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-            
-        # DDL의 CHECK 제약 조건 위반 (예: 종료 시간이 시작 시간보다 빠름)
-        if e.pgcode == '23514':
-            return jsonify(error="CHECK 제약 조건 위반: ShareEndTime은 ShareStartTime보다 늦어야 합니다."), 400
-        
-        # DDL의 GIST 제약 조건 위반 (시간 중첩)
-        if e.pgcode == '23P01': # 'exclusion_violation'
-            return jsonify(error="시간 중첩 오류: 해당 공간에 이미 등록된 공유 시간이 있습니다."), 409 # 409: Conflict
-            
-        # DDL의 FK 제약 조건 위반 (없는 SpaceID)
-        if e.pgcode == '23503':
-            return jsonify(error="존재하지 않는 SpaceID입니다. (FK 오류)"), 404
+        conn.rollback()
+        if e.pgcode == '23P01': 
+            return jsonify(error="이미 겹치는 공유 시간이 존재합니다."), 409
 
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        if e.pgcode == '23514': 
+            return jsonify(error="시간 설정 오류: 종료 시간이 시작 시간보다 늦어야 하며, '분'과 '초'는 0이어야 합니다. (1시간 단위)"), 400
+            
+        return jsonify(error="DB 오류", details=str(e)), 500
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ====================================================
-# 7. 방문자: 예약 가능한 공간 조회 (GET /spaces)
+# 4. 방문자: 예약 가능한 공간 조회 (GET /spaces)
 # ====================================================
 @app.route('/spaces', methods=['GET'])
 def get_available_spaces():
-    conn = None
-    cur = None
+    # 검색 조건 파라미터
+    search_start = request.args.get('start_time')
+    search_end = request.args.get('end_time')
+
+    # 파라미터가 없으면 에러 처리 혹은 기본값
+    if not search_start or not search_end:
+        return jsonify(error="시작 시간과 종료 시간을 입력해주세요."), 400
+
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 3개 테이블을 JOIN
-        # 1. Zone이 'Available' 상태여야 함
-        # 2. 공유 종료 시간이 현재 시간(NOW())보다 늦어야 함 (지난 일정 안보기)
-        query = sql.SQL(
-            """
+        # [수정된 쿼리]
+        # 1. 사용자가 요청한 시간(Request)이 공유 시간(Share) 범위 안에 포함되어야 함
+        # 2. fn_is_vehicle_in 함수로 입주민 부재 확인 (30분 룰)
+        query = sql.SQL("""
             SELECT 
                 ss.ShareID,
                 ss.ShareStartTime,
                 ss.ShareEndTime,
                 ps.SpaceID,
-                pz.ZoneName
+                pz.ZoneName,
+                ps.SpaceNumber
             FROM ShareSchedule ss
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
             JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
             WHERE 
                 pz.Status = 'Available'
-                AND ss.ShareEndTime > NOW()
-            ORDER BY 
-                ss.ShareStartTime ASC; 
-            """
-        )
+                -- [조건 1] 공유 시간이 사용자가 검색한 시간을 포함해야 함
+                AND ss.ShareStartTime <= %s 
+                AND ss.ShareEndTime >= %s
+                
+                -- [조건 2] 해당 시간에 겹치는 다른 예약이 없어야 함
+                AND NOT EXISTS (
+                    SELECT 1 FROM Reservation r 
+                    WHERE r.ShareID = ss.ShareID 
+                    AND r.Status IN ('Pending', 'Approved', 'InUse')
+                    AND tsrange(r.ReserveStartTime, r.ReserveEndTime) && tsrange(%s::timestamp, %s::timestamp)
+                )
+                
+                -- [조건 3] 30분 이내 예약인 경우 입주민 차량 부재 확인
+                AND (
+                    %s::timestamp > (NOW() + INTERVAL '30 minute') -- 30분 뒤 예약은 무조건 OK
+                    OR
+                    fn_is_vehicle_in(ps.OwnerVehicleID) = FALSE -- 당장 예약은 입주민 없어야 함
+                )
+            ORDER BY ss.ShareStartTime ASC;
+        """)
         
-        cur.execute(query)
+        # 파라미터 바인딩 (SQL Injection 방지 및 타입 안전성)
+        cur.execute(query, (search_start, search_end, search_start, search_end, search_start))
+        
         spaces = cur.fetchall()
-
         return jsonify(available_spaces=spaces), 200
-
-    except Exception as e:
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+    except psycopg2.Error as e:
+        # DB 에러 시 콘솔에 출력하여 원인 파악
+        print(f"DB Error in /spaces: {e}")
+        return jsonify(error="데이터베이스 검색 오류", details=str(e)), 500
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================
-# 8. 방문자: 주차 예약 생성 (POST /reservation)
+# 5. 방문자: 주차 예약 (POST /reservation)
 # ===============================================
 @app.route('/reservation', methods=['POST'])
-def create_reservation():    
-    # 1. 클라이언트로부터 JSON 데이터 받기
+def create_reservation():
     try:
         data = request.get_json()
-        user_id = data['UserID'] # (인증 대신) 예약하는 방문자 ID
-        share_id = data['ShareID'] # 'GET /spaces'에서 봤던 그 ShareID
-        start_time = data['ReserveStartTime'] # 예: "2025-11-13 14:00:00"
-        end_time = data['ReserveEndTime']     # 예: "2025-11-13 16:00:00"
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. UserID, ShareID, ReserveStartTime, ReserveEndTime이 필요합니다.", details=str(e)), 400
+        vehicle_id, share_id, start, end = data['VehicleID'], data['ShareID'], data['ReserveStartTime'], data['ReserveEndTime']
+    except: return jsonify(error="데이터 누락"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 예약 생성 (INSERT)
-        # INSERT만 시도
-        # 모든 유효성 검사(시간 범위, 중복, 구역 폐쇄)는
-        # DB에 심어둔 'fn_validate_reservation' 트리거가 자동으로 수행
-        #
-        query_insert = sql.SQL(
-            """
-            INSERT INTO Reservation (ShareID, VisitorID, ReserveStartTime, ReserveEndTime, Status)
-            VALUES (%s, %s, %s, %s, 'Pending')
-            RETURNING ReservationID
-            """
+        # 트리거가 중복 등을 검증하므로 바로 Insert
+        cur.execute(
+            "INSERT INTO Reservation (ShareID, VisitorVehicleID, ReserveStartTime, ReserveEndTime, Status) VALUES (%s, %s, %s, %s, 'Approved') RETURNING ReservationID",
+            (share_id, vehicle_id, start, end)
         )
-        
-        cur.execute(query_insert, (share_id, user_id, start_time, end_time))
-        
-        new_reservation = cur.fetchone()
+        rid = cur.fetchone()['reservationid']
         conn.commit()
-
-        return jsonify(
-            message="주차 공간 예약에 성공했습니다.",
-            reservation_id=new_reservation['reservationid']
-        ), 201
-
+        return jsonify(message="예약되었습니다.", reservation_id=rid), 201
     except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-            
-        # 3. 트리거가 보낸 오류 잡기 (RAISE EXCEPTION)
-        # 'fn_validate_reservation' 함수에서 RAISE EXCEPTION으로 보낸
-        # 사용자 정의 오류(예: '시간 중첩', '범위 초과')는 pgcode 'P0001'로 잡힘
-        if e.pgcode == 'P0001': # 'raise_exception'
-            # e.diag.message_primary는 트리거에서 설정한 'RAISE EXCEPTION' 메시지 본문
-            return jsonify(error="예약 생성 실패 (트리거 검증 오류)", details=e.diag.message_primary), 400
-
-        # DDL의 CHECK 제약 조건 위반 (예: 종료 시간이 시작 시간보다 빠름)
-        if e.pgcode == '23514':
-            return jsonify(error="CHECK 제약 조건 위반: ReserveEndTime은 ReserveStartTime보다 늦어야 합니다."), 400
-        
-        # DDL의 FK 제약 조건 위반 (없는 ShareID 또는 VisitorID)
-        if e.pgcode == '23503':
-            return jsonify(error="존재하지 않는 ShareID 또는 VisitorID입니다. (FK 오류)"), 404
-
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        conn.rollback()
+        if e.pgcode == 'P0001': return jsonify(error="예약 실패", details=e.diag.message_primary), 400
+        return jsonify(error="DB 오류", details=str(e)), 500
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # =========================================================
-# 9. 관리자: 주차 구역 상태 변경 (PUT /zone/<int:zone_id>)
-# =========================================================
-@app.route('/zone/<int:zone_id>', methods=['PUT'])
-def update_zone_status(zone_id):
-    # 1. 클라이언트로부터 JSON 데이터 받기
-    try:
-        data = request.get_json()
-        new_status = data['Status']
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. 'Status'가 필요합니다.", details=str(e)), 400
-
-    # 2. Status 값 유효성 검사 (DB CHECK 제약 조건과 동일)
-    if new_status not in ['Available', 'Closed']:
-        return jsonify(error="Status 값은 'Available' 또는 'Closed'여야 합니다."), 400
-
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 3. 구역 상태 업데이트 (UPDATE)
-        # 만약 new_status가 'Closed'라면, 이 UPDATE 명령이
-        # 'fn_cancel_reservations_on_zone_close' 트리거를 작동시킴
-        # 트리거는 이 ZoneID에 물려있는 모든 'Pending' 예약을 'Canceled'로 자동 변경한다.
-        query_update = sql.SQL(
-            """
-            UPDATE ParkingZone
-            SET Status = %s
-            WHERE ZoneID = %s
-            RETURNING ZoneID, ZoneName, Status
-            """
-        )
-        
-        cur.execute(query_update, (new_status, zone_id))
-        
-        updated_zone = cur.fetchone()
-        
-        # 4. 업데이트 성공 여부 확인
-        if not updated_zone:
-            return jsonify(error="존재하지 않는 ZoneID입니다."), 404 # 404: Not Found
-
-        conn.commit()
-
-        return jsonify(
-            message="주차 구역 상태가 성공적으로 변경되었습니다.",
-            zone=updated_zone
-        ), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        # (기타 DB 오류 처리)
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-
-# =========================================================
-# 10. 방문자: 입차 요청 (POST /entry-request)
+# 6. 게이트 입차 요청 (POST /entry-request)
 # =========================================================
 @app.route('/entry-request', methods=['POST'])
 def request_entry():
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        user_id = data['UserID']
-        gate_id = data['GateID'] # 어느 게이트로 들어왔는지
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. 'UserID'와 'GateID'가 필요합니다.", details=str(e)), 400
+        vehicle_id, gate_id = data['VehicleID'], data['GateID']
+    except: return jsonify(error="데이터 누락"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 2. 유효한 예약 확인 (제안서 기능)
-        # "현재 시간(NOW())"에 "Pending" 상태인 "본인(user_id)"의 예약이 있는지 확인
-        query_find_reservation = sql.SQL(
-            """
-            SELECT ReservationID, Status
-            FROM Reservation
-            WHERE VisitorID = %s
-              AND Status = 'Pending'
-              AND NOW() BETWEEN ReserveStartTime AND ReserveEndTime
-            LIMIT 1;
-            """
-        )
-        cur.execute(query_find_reservation, (user_id,))
-        valid_reservation = cur.fetchone()
-
-        if not valid_reservation:
-            return jsonify(error="유효한 예약이 없습니다. (시간 확인 또는 이미 사용된 예약)"), 404 # 404: Not Found
-        
-        reservation_id = valid_reservation['reservationid']
-
-        # 3. 게이트 로그 기록 (제안서 기능)
-        # "관리자 승인 대기" 상태로 로그를 남깁니다.
-        query_insert_log = sql.SQL(
-            """
-            INSERT INTO GateLog (ReservationID, GateID, Action)
-            VALUES (%s, %s, 'Entry')
-            RETURNING LogID, Timestamp
-            """
-        )
-        cur.execute(query_insert_log, (reservation_id, gate_id))
-        new_log = cur.fetchone()
-        
-        # 4. 예약 상태를 'InUse'(이용중)로 변경
+        # 트리거(fn_gate_access_control)가 Status를 결정함
         cur.execute(
-            sql.SQL('UPDATE Reservation SET Status = %s WHERE ReservationID = %s'),
-            ('InUse', reservation_id)
+            """
+            INSERT INTO GateLog (VehicleID, GateID, Action)
+            VALUES (%s, %s, 'Entry')
+            RETURNING LogID, Status
+            """, 
+            (vehicle_id, gate_id)
         )
-
+        result = cur.fetchone()
+        log_status = result['status']
         conn.commit()
 
-        return jsonify(
-            message="입차 요청이 기록되었습니다. 관리자 승인을 대기합니다.",
-            log_id=new_log['logid'],
-            reservation_id=reservation_id,
-            timestamp=new_log['timestamp']
-        ), 200
+        if log_status == 'Automatic':
+            cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
+            conn.commit()
+            socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+            return jsonify(message="자동 승인되었습니다. 어서오세요.", status="Automatic"), 200
+        else:
+            return jsonify(message="예약 시간 외 방문입니다. 관리자 호출 중...", status="Pending"), 202
 
     except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        # 'Pending' 예약을 못 찾았는데 'InUse' 예약을 찾은 경우 (중복 요청)
-        if e.pgcode == '23514': # (만약 Status에 CHECK 제약이 있다면)
-             return jsonify(error="이미 입차 요청(InUse) 상태입니다."), 409
-        if e.pgcode == '23503': # FK 오류
-            return jsonify(error="존재하지 않는 GateID입니다."), 404
-            
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        conn.rollback()
+        if e.pgcode == 'P0001': return jsonify(error="입차 거부", details=e.diag.message_primary), 403
+        return jsonify(error="DB 오류", details=str(e)), 500
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # =========================================================
-# 11. 관리자: 입차 승인 (POST /approve-entry)
-# =========================================================
-@app.route('/approve-entry', methods=['POST'])
-def approve_entry():
-    # 1. 클라이언트로부터 JSON 데이터 받기
-    try:
-        data = request.get_json()
-        reservation_id = data['ReservationID'] # 승인할 예약 ID
-        gate_id = data['GateID']               # 개방할 게이트 ID
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. 'ReservationID'와 'GateID'가 필요합니다.", details=str(e)), 400
-
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 승인할 예약이 'InUse' 상태인지 확인
-        query_check_reservation = sql.SQL(
-            "SELECT Status FROM Reservation WHERE ReservationID = %s"
-        )
-        cur.execute(query_check_reservation, (reservation_id,))
-        reservation = cur.fetchone()
-
-        if not reservation:
-            return jsonify(error="존재하지 않는 ReservationID입니다."), 404
-        
-        if reservation['status'] != 'InUse':
-            return jsonify(error="승인 대상 예약이 'InUse'(이용중/입차대기) 상태가 아닙니다.", details=f"현재 상태: {reservation['status']}"), 400
-
-        # 3. 게이트 상태를 'Open'으로 변경
-        query_open_gate = sql.SQL(
-            """
-            UPDATE Gate SET Status = 'Open' WHERE GateID = %s
-            RETURNING GateID, GateName, Status
-            """
-        )
-        cur.execute(query_open_gate, (gate_id,))
-        opened_gate = cur.fetchone()
-
-        if not opened_gate:
-            return jsonify(error="존재하지 않는 GateID입니다."), 404
-
-        conn.commit()
-
-
-        return jsonify(
-            message="입차가 승인되었습니다. 게이트를 개방합니다.",
-            opened_gate=opened_gate
-        ), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        if e.pgcode == '23503': # FK 오류
-            return jsonify(error="존재하지 않는 ReservationID 또는 GateID입니다."), 404
-            
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-
-# =========================================================
-# 12. 방문자: 출차 요청 (POST /exit-request)
+# 7. 게이트 출차 요청 (POST /exit-request)
 # =========================================================
 @app.route('/exit-request', methods=['POST'])
 def request_exit():
-    """
-    방문자가 이용을 마치고 출차를 요청합니다.
-    (제안서 기능: 'Completed'로 상태 변경 및 로그 기록)
-    """
-    
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        user_id = data['UserID']
-        gate_id = data['GateID'] # 어느 게이트로 나가는지
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. 'UserID'와 'GateID'가 필요합니다.", details=str(e)), 400
+        vehicle_id, gate_id = data['VehicleID'], data['GateID']
+    except: return jsonify(error="데이터 누락"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 2. 'InUse' 상태인 본인의 예약 확인
-        # (출차는 아무 때나 할 수 있어야 하므로 시간(NOW()) 검사는 제외)
-        query_find_reservation = sql.SQL(
-            """
-            SELECT ReservationID, Status
-            FROM Reservation
-            WHERE VisitorID = %s
-              AND Status = 'InUse'
-            LIMIT 1;
-            """
-        )
-        cur.execute(query_find_reservation, (user_id,))
-        valid_reservation = cur.fetchone()
-
-        if not valid_reservation:
-            return jsonify(error="출차할 수 있는 '이용중(InUse)' 상태의 예약이 없습니다."), 404
-        
-        reservation_id = valid_reservation['reservationid']
-
-        # 3. 게이트 로그 기록 ('Exit')
-        query_insert_log = sql.SQL(
-            """
-            INSERT INTO GateLog (ReservationID, GateID, Action)
-            VALUES (%s, %s, 'Exit')
-            RETURNING LogID, Timestamp
-            """
-        )
-        cur.execute(query_insert_log, (reservation_id, gate_id))
-        new_log = cur.fetchone()
-        
-        # 4. 예약 상태를 'Completed'(완료)로 변경
+        # 출차는 항상 승인. 트리거가 Reservation 상태를 Completed로 자동 변경
         cur.execute(
-            sql.SQL('UPDATE Reservation SET Status = %s WHERE ReservationID = %s'),
-            ('Completed', reservation_id)
+            "INSERT INTO GateLog (VehicleID, GateID, Action) VALUES (%s, %s, 'Exit') RETURNING LogID",
+            (vehicle_id, gate_id)
         )
-
         conn.commit()
 
-        return jsonify(
-            message="출차가 기록되었습니다. 이용해 주셔서 감사합니다.",
-            log_id=new_log['logid'],
-            reservation_id=reservation_id,
-            timestamp=new_log['timestamp']
-        ), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        if e.pgcode == '23503': # FK 오류
-            return jsonify(error="존재하지 않는 GateID입니다."), 404
-            
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
+        cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
+        conn.commit()
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+        
+        return jsonify(message="안녕히 가세요.", status="Approved"), 200
     except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        conn.rollback()
+        return jsonify(error="오류 발생", details=str(e)), 500
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
+
+# =========================================================
+# 8. 관리자: 입차 승인 (POST /approve-entry)
+# =========================================================
+@app.route('/approve-entry', methods=['POST'])
+def approve_entry():
+    try:
+        log_id = request.get_json()['LogID']
+    except: return jsonify(error="LogID 필요"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # 로그 상태 승인으로 변경
+        cur.execute("UPDATE GateLog SET Status = 'Approved' WHERE LogID = %s RETURNING GateID", (log_id,))
+        res = cur.fetchone()
+        if not res: return jsonify(error="유효하지 않은 LogID"), 404
+
+        gate_id = res['gateid']
+        cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
+        conn.commit()
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+
+        return jsonify(message="승인 완료"), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error="오류", details=str(e)), 500
+    finally:
+        conn.close()
+
+# ===============================================================
+# 9. 전체 주차 공간 현황 (GET /parking-status)
+# ===============================================================
+@app.route('/parking-status')
+def parking_status():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 우선순위에 따른 상태 결정 로직
+        query = sql.SQL("""
+            SELECT 
+                ps.SpaceID,
+                ps.SpaceNumber,
+                pz.ZoneName,
+                CASE 
+                    WHEN pz.Status = 'Closed' THEN 'closed'
+                    WHEN ps.OwnerVehicleID IS NULL THEN 'unassigned'
+                    WHEN EXISTS (
+                        SELECT 1 FROM Reservation r
+                        JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                        WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse'
+                    ) THEN 'external'
+                    WHEN EXISTS (
+                        SELECT 1 FROM Reservation r
+                        JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                        WHERE ss.SpaceID = ps.SpaceID AND r.Status IN ('Pending', 'Approved')
+                        AND NOW() BETWEEN r.ReserveStartTime AND r.ReserveEndTime
+                    ) THEN 'reserved'
+                    WHEN EXISTS (
+                        SELECT 1 FROM ShareSchedule ss
+                        WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime
+                    ) THEN 'shared'
+                    ELSE 'occupied' -- 기본적으로 입주민 점유로 간주
+                END AS status
+            FROM ParkingSpace ps
+            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            ORDER BY pz.ZoneName, ps.SpaceNumber;
+        """)
+        
+        cur.execute(query)
+        spaces = cur.fetchall()
+        
+        # 프론트엔드(index.html)에 맞는 형식으로 변환
+        zones_data = {}
+        for space in spaces:
+            # 예: "A구역" -> Key: "A구역"
+            zname = space['zonename']
+            if zname not in zones_data: zones_data[zname] = []
+            
+            zones_data[zname].append({
+                'id': space['spaceid'],
+                'num': space['spacenumber'],
+                'status': space['status']
+            })
+            
+        return jsonify(zones_data)
+    finally:
+        conn.close()
+
+# =========================================================
+# 10. 관리자: 주차 구역 상태 변경 (PUT /zone/<int:zone_id>)
+# =========================================================
+@app.route('/zone/<int:zone_id>', methods=['PUT'])
+def update_zone_status(zone_id):
+    try:
+        data = request.get_json()
+        new_status = data['Status']
+        if new_status not in ['Available', 'Closed']:
+            return jsonify(error="Status는 Available 또는 Closed여야 합니다."), 400
+    except: return jsonify(error="데이터 누락"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # 트리거가 관련 예약을 자동 취소함
+        cur.execute(
+            "UPDATE ParkingZone SET Status = %s WHERE ZoneID = %s RETURNING ZoneID, ZoneName, Status",
+            (new_status, zone_id)
+        )
+        updated = cur.fetchone()
+        if not updated: return jsonify(error="존재하지 않는 ZoneID"), 404
+        conn.commit()
+        return jsonify(message="상태 변경 성공", zone=updated), 200
+    finally:
+        conn.close()
 
 # =============================================================
-# 13. 방문자: 예약 취소 (DELETE /reservation/<int:reservation_id>)
+# 11. 방문자: 예약 취소 (DELETE /reservation/<int:reservation_id>)
 # =============================================================
 @app.route('/reservation/<int:reservation_id>', methods=['DELETE'])
 def cancel_reservation(reservation_id):
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 1. 예약을 'Canceled' 상태로 변경
-        query_update = sql.SQL(
-            """
-            UPDATE Reservation
-            SET Status = 'Canceled'
-            WHERE ReservationID = %s
-              AND Status = 'Pending' -- 'Pending' 상태인 것만 취소 가능
-            RETURNING ReservationID, Status;
-            """
+        cur.execute(
+            "UPDATE Reservation SET Status = 'Canceled' WHERE ReservationID = %s AND Status = 'Approved' RETURNING ReservationID",
+            (reservation_id,)
         )
-        
-        cur.execute(query_update, (reservation_id,))
-        
-        canceled_reservation = cur.fetchone()
-        
-        # 2. 취소 성공 여부 확인
-        if not canceled_reservation:
-            # 2-1. (확인) 애초에 ID가 없는지?
-            cur.execute(sql.SQL("SELECT Status FROM Reservation WHERE ReservationID = %s"), (reservation_id,))
-            existing_reservation = cur.fetchone()
-            
-            if not existing_reservation:
-                return jsonify(error="존재하지 않는 ReservationID입니다."), 404
-            
-            # 2-2. ID는 있으나 'Pending' 상태가 아님
-            return jsonify(
-                error="예약을 취소할 수 없습니다. 'Pending'(대기) 상태의 예약만 취소 가능합니다.",
-                current_status=existing_reservation['status']
-            ), 400 # 400: Bad Request
-
+        if not cur.fetchone():
+            return jsonify(error="취소할 수 없는 예약이거나 존재하지 않습니다."), 400
         conn.commit()
-
-        return jsonify(
-            message="예약이 성공적으로 취소되었습니다.",
-            canceled_reservation=canceled_reservation
-        ), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        return jsonify(message="예약이 취소되었습니다."), 200
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # =============================================================
-# 14. 입주민: 비움 시간 수정 (PUT /schedule/<int:schedule_id>)
+# 12. 입주민: 비움 시간 수정 (PUT /schedule/<int:schedule_id>)
 # =============================================================
 @app.route('/schedule/<int:schedule_id>', methods=['PUT'])
 def update_share_schedule(schedule_id):
-    # 1. 클라이언트로부터 JSON 데이터 받기
     try:
         data = request.get_json()
-        start_time = data['ShareStartTime']
-        end_time = data['ShareEndTime']
-    except Exception as e:
-        return jsonify(error="잘못된 요청 데이터입니다. 'ShareStartTime'과 'ShareEndTime'이 필요합니다.", details=str(e)), 400
+        start, end = data['ShareStartTime'], data['ShareEndTime']
+    except: return jsonify(error="데이터 누락"), 400
 
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 비움 시간 업데이트
-        # 이 UPDATE가 'fn_cancel_reservations_on_schedule_change' 트리거를 작동시킵니다.
-        # 트리거는 이 ShareID에 물려있던 'Pending' 예약을 'Canceled'로 자동 변경합니다.
-        query_update = sql.SQL(
-            """
-            UPDATE ShareSchedule
-            SET ShareStartTime = %s, ShareEndTime = %s
-            WHERE ShareID = %s
-            RETURNING ShareID, ShareStartTime, ShareEndTime;
-            """
+        cur.execute(
+            "UPDATE ShareSchedule SET ShareStartTime = %s, ShareEndTime = %s WHERE ShareID = %s RETURNING ShareID",
+            (start, end, schedule_id)
         )
-        
-        cur.execute(query_update, (start_time, end_time, schedule_id))
-        
-        updated_schedule = cur.fetchone()
-        
-        if not updated_schedule:
-            return jsonify(error="존재하지 않는 ShareID입니다."), 404
-
+        if not cur.fetchone(): return jsonify(error="존재하지 않는 스케줄"), 404
         conn.commit()
-
-        return jsonify(
-            message="비움 시간이 성공적으로 수정되었습니다. (관련 'Pending' 예약이 자동 취소되었을 수 있습니다)",
-            updated_schedule=updated_schedule
-        ), 200
-
+        return jsonify(message="수정되었습니다."), 200
     except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        # DDL의 CHECK 제약 조건 위반 (예: 종료 시간이 시작 시간보다 빠름)
-        if e.pgcode == '23514':
-            return jsonify(error="CHECK 제약 조건 위반: ShareEndTime은 ShareStartTime보다 늦어야 합니다."), 400
-        # DDL의 GIST 제약 조건 위반 (시간 중첩)
-        if e.pgcode == '23P01': 
-            return jsonify(error="시간 중첩 오류: 해당 공간의 다른 공유 시간과 겹칩니다."), 409
-            
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        conn.rollback()
+        return jsonify(error="DB 오류 (시간 중복 등)", details=str(e)), 400
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================================
-# 15. 입주민: 비움 시간 삭제 (DELETE /schedule/<int:schedule_id>)
+# 13. 입주민: 비움 시간 삭제 (DELETE /schedule/<int:schedule_id>)
 # ===============================================================
 @app.route('/schedule/<int:schedule_id>', methods=['DELETE'])
 def delete_share_schedule(schedule_id):
-    
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 비움 시간 삭제
-        # 이 DELETE 명령이 'fn_cancel_reservations_on_schedule_change'
-        # 트리거를 작동시킵니다.
-        # 이 ShareID에 연결된 모든 'Pending' 예약이 'Canceled'로 변경됩니다.
-        query_delete = sql.SQL(
-            """
-            DELETE FROM ShareSchedule
-            WHERE ShareID = %s
-            RETURNING ShareID;
-            """
-        )
-        
-        cur.execute(query_delete, (schedule_id,))
-        
-        deleted_schedule = cur.fetchone()
-        
-        if not deleted_schedule:
-            return jsonify(error="존재하지 않는 ShareID입니다."), 404
-
+        cur.execute("DELETE FROM ShareSchedule WHERE ShareID = %s RETURNING ShareID", (schedule_id,))
+        if not cur.fetchone(): return jsonify(error="존재하지 않는 스케줄"), 404
         conn.commit()
-
-        return jsonify(
-            message="비움 시간이 성공적으로 삭제되었습니다. (관련 'Pending' 예약이 자동 취소되었을 수 있습니다)",
-            deleted_schedule=deleted_schedule
-        ), 200
-
+        return jsonify(message="삭제되었습니다."), 200
     except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        
-        # FK 제약 조건 위반 (23503)
-        # 만약 'InUse' 상태의 예약이 이 일정을 참조하고 있다면 발생할 수 있습니다.
-        # (DDL의 ON DELETE CASCADE가 이 문제를 해결할 수도 있지만,
-        #  트리거가 'Pending'만 처리하므로 충돌 가능성이 있습니다.)
-        if e.pgcode == '23503':
-            return jsonify(error="외래 키 제약 조건 위반: 이 일정을 참조하는 'InUse' 또는 'Completed' 예약이 존재할 수 있습니다.", details=str(e)), 409
-
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        conn.rollback()
+        return jsonify(error="삭제 실패", details=str(e)), 409
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================================
-# 16. 방문자: 내 예약 내역 조회 (GET /my-reservations)
+# 14. 방문자: 내 예약 내역 조회 (GET /my-reservations)
 # ===============================================================
 @app.route('/my-reservations', methods=['GET'])
-def get_my_reservations():    
-    # 1. 클라이언트로부터 UserID 받기 (쿼리 파라미터 사용)
-    # 예: /my-reservations?user_id=test_visitor
-    user_id = request.args.get('user_id')
+def get_my_reservations():
+    vid = request.args.get('vehicle_id')
+    if not vid: return jsonify(error="vehicle_id 필요"), 400
 
-    if not user_id:
-        return jsonify(error="잘못된 요청입니다. 'user_id' 쿼리 파라미터가 필요합니다."), 400
-
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 해당 UserID의 모든 예약 조회
-        # (ShareSchedule, ParkingSpace, ParkingZone과 JOIN하여
-        #  구역 이름, 공간 ID 같은 상세 정보도 함께 반환)
-        query_select = sql.SQL(
-            """
+        
+        # [수정] ps.SpaceNumber 추가
+        cur.execute("""
             SELECT 
-                r.ReservationID, 
-                r.Status,
-                r.ReserveStartTime, 
-                r.ReserveEndTime,
-                pz.ZoneName,
-                ps.SpaceID
+                r.*, 
+                pz.ZoneName, 
+                ps.SpaceID,
+                ps.SpaceNumber -- <--- 여기 추가됨!
             FROM Reservation r
             JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
             JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
-            WHERE 
-                r.VisitorID = %s
-            ORDER BY 
-                r.ReserveStartTime DESC; -- 최근 예약이 위로
-            """
-        )
+            WHERE r.VisitorVehicleID = %s
+            ORDER BY r.ReserveStartTime DESC
+        """, (vid,))
         
-        cur.execute(query_select, (user_id,))
-        
-        reservations = cur.fetchall()
-        
-        if not reservations:
-            return jsonify(message="예약 내역이 없습니다.", reservations=[]), 200
-
-        return jsonify(reservations=reservations), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        return jsonify(reservations=cur.fetchall()), 200
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================================
-# 17. 입주민: 내 주차 공간 조회 (GET /my-spaces)
+# 15. 입주민: 내 주차 공간 조회 (GET /my-spaces)
 # ===============================================================
 @app.route('/my-spaces', methods=['GET'])
 def get_my_spaces():
-    # 1. 클라이언트로부터 UserID 받기 (쿼리 파라미터)
-    user_id = request.args.get('user_id')
+    vid = request.args.get('vehicle_id')
+    if not vid: return jsonify(error="vehicle_id 필요"), 400
 
-    if not user_id:
-        return jsonify(error="잘못된 요청입니다. 'user_id' 쿼리 파라미터가 필요합니다."), 400
-
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 2. 해당 UserID(OwnerID)의 모든 ParkingSpace 조회
-        # (ParkingZone과 JOIN하여 구역 이름도 함께 반환)
-        query_select = sql.SQL(
-            """
-            SELECT 
-                ps.SpaceID,
-                pz.ZoneName,
-                pz.Status AS ZoneStatus
+        cur.execute("""
+            SELECT ps.SpaceID, ps.SpaceNumber, pz.ZoneName, pz.Status as ZoneStatus
             FROM ParkingSpace ps
             JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
-            WHERE 
-                ps.OwnerID = %s
-            ORDER BY 
-                ps.SpaceID ASC;
-            """
-        )
-        
-        cur.execute(query_select, (user_id,))
-        
-        spaces = cur.fetchall()
-        
-        if not spaces:
-            # DBeaver에서 'test_resident'에게 ParkingSpace를 할당했는지 확인
-            return jsonify(message="소유한 주차 공간이 없습니다.", spaces=[]), 200
-
-        return jsonify(spaces=spaces), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        # Role='Resident'가 아닌 ID로 조회 시도 시 (FK 오류는 없지만)
-        return jsonify(error="데이터베이스 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+            WHERE ps.OwnerVehicleID = %s
+            ORDER BY ps.SpaceID
+        """, (vid,))
+        return jsonify(spaces=cur.fetchall()), 200
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
 # ===============================================================
-# 18. 관리자: 로그 조회 및 모니터링 (GET /admin/logs)
+# 16. 입주민: 내 공유 내역 조회 (GET /my-shares)
+# ===============================================================
+@app.route('/my-shares', methods=['GET'])
+def get_my_shares():
+    vid = request.args.get('vehicle_id')
+    if not vid: return jsonify(error="vehicle_id 필요"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT ss.*, 
+            (SELECT COUNT(*) FROM Reservation r WHERE r.ShareID = ss.ShareID AND r.Status IN ('InUse', 'Completed')) = 0 AS is_deletable
+            FROM ShareSchedule ss
+            JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            WHERE ps.OwnerVehicleID = %s
+            ORDER BY ss.ShareStartTime DESC
+        """, (vid,))
+        return jsonify(shares=cur.fetchall()), 200
+    finally:
+        conn.close()
+
+# ===============================================================
+# 17. 관리자: 승인 대기 목록 (GET /admin/pending-requests)
+# ===============================================================
+@app.route('/admin/pending-requests', methods=['GET'])
+def get_pending_requests():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM GateLog WHERE Action='Entry' AND Status='PendingApproval' ORDER BY Timestamp ASC")
+        return jsonify(requests=cur.fetchall()), 200
+    finally:
+        conn.close()
+
+# ===============================================================
+# 18. 관리자: 로그 조회 (GET /admin/logs)
 # ===============================================================
 @app.route('/admin/logs', methods=['GET'])
 def get_admin_logs():
-    """
-    관리자가 입출차 로그(GateLog)와 예약 내역(Reservation)을
-    다양한 조건으로 필터링하여 조회합니다.
-    """
+    log_type = request.args.get('log_type', 'reservation')
+    zone_id = request.args.get('zone_id')
+    vehicle_id = request.args.get('vehicle_id')
     
-    # 1. 클라이언트로부터 필터링 조건 받기 (쿼리 파라미터)
-    # 예: /admin/logs?log_type=gate&zone_id=1
-    log_type = request.args.get('log_type', 'reservation') # 'gate' 또는 'reservation'
-    zone_id = request.args.get('zone_id', type=int)
-    user_id = request.args.get('user_id')
-    status = request.args.get('status')
-    
-    conn = None
-    cur = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        query = ""
-        params = []
-
+        
         if log_type == 'gate':
-            # 1. GateLog 조회 (복잡한 쿼리 예시)
-            # GateLog + Reservation + ParkingSpace + ParkingZone JOIN
-            base_query = """
-                SELECT 
-                    gl.LogID, gl.Timestamp, gl.Action,
-                    r.ReservationID, r.VisitorID,
-                    pz.ZoneName, ps.SpaceID
+            query_str = """
+                SELECT gl.*, pz.ZoneName 
                 FROM GateLog gl
-                JOIN Reservation r ON gl.ReservationID = r.ReservationID
-                JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
-                JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
-                JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+                LEFT JOIN Reservation r ON gl.ReservationID = r.ReservationID
+                LEFT JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                LEFT JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+                LEFT JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
                 WHERE 1=1
             """
-            
-            # 동적 쿼리 생성 (필터 추가)
-            if zone_id:
-                base_query += " AND pz.ZoneID = %s"
+            params = []
+            if zone_id: 
+                query_str += " AND pz.ZoneID = %s"
                 params.append(zone_id)
-            if user_id:
-                base_query += " AND r.VisitorID = %s"
-                params.append(user_id)
+            if vehicle_id:
+                query_str += " AND gl.VehicleID = %s"
+                params.append(vehicle_id)
+            query_str += " ORDER BY gl.Timestamp DESC"
+            cur.execute(query_str, tuple(params))
             
-            base_query += " ORDER BY gl.Timestamp DESC"
-            query = sql.SQL(base_query)
-
-        else: # 기본값: log_type == 'reservation'
-            # 2. Reservation 조회 (복잡한 쿼리 예시)
-            base_query = """
-                SELECT 
-                    r.ReservationID, r.Status, r.ReserveStartTime, r.VisitorID,
-                    pz.ZoneName, ps.SpaceID
+        else: # reservation
+            query_str = """
+                SELECT r.*, pz.ZoneName 
                 FROM Reservation r
                 JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
                 JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
                 JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
                 WHERE 1=1
             """
-            
-            # 동적 쿼리 생성 (필터 추가)
+            params = []
             if zone_id:
-                base_query += " AND pz.ZoneID = %s"
+                query_str += " AND pz.ZoneID = %s"
                 params.append(zone_id)
-            if user_id:
-                base_query += " AND r.VisitorID = %s"
-                params.append(user_id)
-            if status:
-                base_query += " AND r.Status = %s"
-                params.append(status)
-            
-            base_query += " ORDER BY r.ReserveStartTime DESC"
-            query = sql.SQL(base_query)
-        
-        # 3. 쿼리 실행
-        cur.execute(query, tuple(params))
-        logs = cur.fetchall()
+            if vehicle_id:
+                query_str += " AND r.VisitorVehicleID = %s"
+                params.append(vehicle_id)
+            query_str += " ORDER BY r.ReserveStartTime DESC"
+            cur.execute(query_str, tuple(params))
 
-        return jsonify(log_type=log_type, count=len(logs), logs=logs), 200
-
-    except psycopg2.Error as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="데이터베이스 쿼리 오류가 발생했습니다.", details=str(e), pgcode=e.pgcode), 500
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        return jsonify(logs=cur.fetchall()), 200
     finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        conn.close()
 
+# ===============================================================
+# 19. 관리자: 모든 구역 조회 (GET /zones)
+# ===============================================================
+@app.route('/zones', methods=['GET'])
+def get_all_zones():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM ParkingZone ORDER BY ZoneID ASC")
+        return jsonify(zones=cur.fetchall()), 200
+    finally:
+        conn.close()
 
-# --- Flask 앱 실행 ---
+# ===============================================================
+# 20. 관리자: 게이트 강제 개방 (POST /gate/open)
+# ===============================================================
+@app.route('/gate/<int:gate_id>/open', methods=['POST'])
+def open_gate(gate_id):
+    try:
+        admin_id = request.get_json()['AdminVehicleID']
+    except: return jsonify(error="AdminVehicleID 필요"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute('SELECT Role FROM "User" WHERE VehicleID = %s', (admin_id,))
+        user = cur.fetchone()
+        if not user or user['role'] != 'Admin':
+            return jsonify(error="관리자 권한 없음"), 403
+
+        cur.execute("UPDATE Gate SET Status='Open' WHERE GateID=%s", (gate_id,))
+        conn.commit()
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+        return jsonify(message="강제 개방 완료"), 200
+    finally:
+        conn.close()
+
+# ===============================================================
+# 21. 마스터 맵 조회 (GET /parking-map)
+# ===============================================================
+@app.route('/parking-map', methods=['GET'])
+def get_parking_map_status():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                ps.SpaceID, ps.SpaceNumber, pz.ZoneName, ps.OwnerVehicleID,
+                CASE
+                    WHEN pz.Status = 'Closed' THEN 'Closed'
+                    WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID=ss.ShareID WHERE ss.SpaceID=ps.SpaceID AND r.Status='InUse') THEN 'InUse'
+                    WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID=ss.ShareID WHERE ss.SpaceID=ps.SpaceID AND r.Status='Approved') THEN 'Reserved'
+                    WHEN EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID=ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) THEN 'Shared'
+                    WHEN ps.OwnerVehicleID IS NOT NULL THEN 'Owned'
+                    ELSE 'Available'
+                END AS Status
+            FROM ParkingSpace ps
+            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            ORDER BY ps.SpaceID
+        """)
+        spaces = cur.fetchall()
+
+        cur.execute("SELECT * FROM Gate ORDER BY GateID")
+        gates = cur.fetchall()
+        
+        return jsonify(spaces=spaces, gates=gates), 200
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True)
