@@ -119,7 +119,6 @@
             </table>
         </div>
     </div>
-
     <script>
         // 0. 초기화 및 권한 체크
         const vehicleId = sessionStorage.getItem('vehicleId');
@@ -132,6 +131,21 @@
 
         const socket = io();
 
+        // [핵심 추가] 시차 변환 없이(UTC 숫자 그대로) 보여주는 함수
+        function formatTimeRaw(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            
+            // UTC 메서드를 사용하여 서버에서 보낸 원본 숫자만 추출
+            const year = date.getUTCFullYear();
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(date.getUTCDate()).padStart(2, '0');
+            const hour = String(date.getUTCHours()).padStart(2, '0');
+            const min = String(date.getUTCMinutes()).padStart(2, '0');
+            
+            return `${year}-${month}-${day} ${hour}:${min}`;
+        }
+
         // 초기 데이터 로드
         loadPendingRequests();
         loadZones();
@@ -141,7 +155,7 @@
         setInterval(loadPendingRequests, 3000);
 
         // ===========================
-        // 1. 입차 승인 대기 목록 로드
+        // 1. 입차 승인 대기 목록 로드 (Timestamp 수정)
         // ===========================
         async function loadPendingRequests() {
             try {
@@ -156,12 +170,13 @@
 
                 listDiv.innerHTML = '';
                 data.requests.forEach(req => {
-                    const time = new Date(req.timestamp).toLocaleTimeString();
+                    // [수정] formatTimeRaw 적용
+                    const displayTime = formatTimeRaw(req.timestamp); 
                     const div = document.createElement('div');
                     div.className = 'request-item';
                     div.innerHTML = `
                         <div class="req-info">
-                            <span class="req-time">[${time}]</span><br>
+                            <span class="req-time">[${displayTime}]</span><br>
                             차량번호: <strong>${req.vehicleid}</strong> (Gate ${req.gateid})
                         </div>
                         <button class="btn-approve" onclick="approveRequest(${req.logid})">승인 (문 열기)</button>
@@ -171,7 +186,7 @@
             } catch (e) { console.error(e); }
         }
 
-        // 입차 승인 실행
+        // 입차 승인 실행 (로직 유지)
         async function approveRequest(logId) {
             if(!confirm('해당 차량의 입차를 승인하시겠습니까?')) return;
             try {
@@ -182,8 +197,8 @@
                 });
                 const data = await response.json();
                 if (response.ok) {
-                    alert(`승인 완료! ${data.opened_gate.gatename}이 열렸습니다.`);
-                    loadPendingRequests(); // 목록 갱신
+                    alert(`승인 완료!`);
+                    loadPendingRequests();
                 } else {
                     alert(data.error);
                 }
@@ -191,7 +206,7 @@
         }
 
         // ===========================
-        // 2. 구역 목록 로드 및 제어
+        // 2. 구역 목록 로드 및 제어 (로직 유지)
         // ===========================
         async function loadZones() {
             try {
@@ -215,7 +230,7 @@
             } catch (e) { console.error(e); }
         }
 
-        // 구역 상태 변경 (Available <-> Closed)
+        // 구역 상태 변경 (로직 유지)
         async function toggleZoneStatus(zoneId, currentStatus) {
             const newStatus = currentStatus === 'Available' ? 'Closed' : 'Available';
             const actionName = newStatus === 'Closed' ? '폐쇄' : '해제(운영재개)';
@@ -230,7 +245,7 @@
                 });
                 if (response.ok) {
                     alert('상태가 변경되었습니다.');
-                    loadZones(); // UI 갱신
+                    loadZones();
                 } else {
                     alert('변경 실패');
                 }
@@ -238,27 +253,7 @@
         }
 
         // ===========================
-        // 3. 게이트 강제 개방
-        // ===========================
-        async function forceOpenGate(gateId) {
-            if(!confirm(`Gate ${gateId}번을 강제로 개방하시겠습니까?`)) return;
-            try {
-                const response = await fetch(`/gate/${gateId}/open`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ AdminVehicleID: vehicleId })
-                });
-                const data = await response.json();
-                if (response.ok) {
-                    alert('게이트 개방 명령을 전송했습니다.');
-                } else {
-                    alert(data.error);
-                }
-            } catch (e) { alert('오류 발생'); }
-        }
-
-        // ===========================
-        // 4. 로그 조회
+        // 4. 로그 조회 (Timestamp/Time 수정)
         // ===========================
         async function loadLogs() {
             const type = document.getElementById('logType').value;
@@ -277,23 +272,27 @@
                 const data = await response.json();
                 
                 tableBody.innerHTML = '';
-                // 최근 20개만 자르기 (실제로는 서버에서 LIMIT하는게 좋음)
                 const logs = data.logs.slice(0, 20);
 
                 logs.forEach(log => {
                     const tr = document.createElement('tr');
+                    
                     if (type === 'gate') {
+                        // [수정] formatTimeRaw 적용
+                        const displayTime = formatTimeRaw(log.timestamp);
                         const actionClass = log.action === 'Entry' ? 'log-entry' : 'log-exit';
                         tr.innerHTML = `
-                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                            <td>${displayTime}</td>
                             <td>${log.vehicleid}</td>
                             <td class="${actionClass}"><strong>${log.action}</strong></td>
                             <td>${log.status}</td>
                             <td>Gate ${log.gateid}</td>
                         `;
                     } else {
+                        // [수정] formatTimeRaw 적용
+                        const displayTime = formatTimeRaw(log.reservestarttime);
                         tr.innerHTML = `
-                            <td>${new Date(log.reservestarttime).toLocaleString()}</td>
+                            <td>${displayTime}</td>
                             <td>${log.visitorvehicleid}</td>
                             <td>${log.zonename || '-'}</td>
                             <td>${log.status}</td>
