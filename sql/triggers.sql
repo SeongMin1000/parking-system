@@ -1,11 +1,9 @@
 -- =====================================================================
--- 0. [초기화] 기존 트리거 및 함수 삭제 (에러 방지용)
+-- 0. [초기화] 기존 트리거 및 함수 삭제 (깨끗하게 재설치)
 -- =====================================================================
-
--- 1) 트리거 삭제 (DROP TRIGGER IF EXISTS 트리거명 ON 테이블명)
 DROP TRIGGER IF EXISTS tr_check_owner_role ON ParkingSpace;
 DROP TRIGGER IF EXISTS tr_assign_specific_space ON "User";
-DROP TRIGGER IF EXISTS tr_auto_assign_space ON "User"; -- (구버전 삭제)
+DROP TRIGGER IF EXISTS tr_auto_assign_space ON "User";
 DROP TRIGGER IF EXISTS tr_cancel_reservations_on_zone_close ON ParkingZone;
 DROP TRIGGER IF EXISTS tr_cancel_reservations_on_schedule_change ON ShareSchedule;
 DROP TRIGGER IF EXISTS tr_validate_reservation ON Reservation;
@@ -13,17 +11,16 @@ DROP TRIGGER IF EXISTS tr_gate_access_control_before ON GateLog;
 DROP TRIGGER IF EXISTS tr_update_reservation_status_after_gate ON GateLog;
 DROP TRIGGER IF EXISTS tr_check_resident_return ON GateLog;
 
--- 2) 함수 삭제 (DROP FUNCTION IF EXISTS 함수명)
 DROP FUNCTION IF EXISTS fn_check_owner_role;
 DROP FUNCTION IF EXISTS fn_assign_specific_space;
-DROP FUNCTION IF EXISTS fn_auto_assign_space; -- (구버전 삭제)
+DROP FUNCTION IF EXISTS fn_auto_assign_space;
 DROP FUNCTION IF EXISTS fn_cancel_reservations_on_zone_close;
 DROP FUNCTION IF EXISTS fn_cancel_reservations_on_schedule_change;
 DROP FUNCTION IF EXISTS fn_validate_reservation;
 DROP FUNCTION IF EXISTS fn_gate_access_control;
 DROP FUNCTION IF EXISTS fn_update_reservation_status_after_gate;
 DROP FUNCTION IF EXISTS fn_check_resident_return;
-DROP FUNCTION IF EXISTS fn_is_vehicle_in; -- (유틸리티 함수)
+DROP FUNCTION IF EXISTS fn_is_vehicle_in;
 
 -- =====================================================================
 -- 1. 유틸리티 함수: 차량 주차 여부 확인 (필수)
@@ -50,7 +47,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =====================================================================
--- 2. 로직: ParkingSpace 소유주 검증 (Resident만 가능)
+-- 2. 로직: ParkingSpace 소유주 검증
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_check_owner_role()
 RETURNS TRIGGER AS $$
@@ -72,7 +69,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_check_owner_role();
 
 -- =====================================================================
--- 3. 로직: 입주민 가입 시 지정된 동(예: 'a-1')에 주차공간 할당
+-- 3. 로직: 입주민 가입 시 주차공간 지정 할당
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_assign_specific_space()
 RETURNS TRIGGER AS $$
@@ -129,7 +126,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_assign_specific_space();
 
 -- =====================================================================
--- 4. 로직: 구역 폐쇄 시 관련 예약 취소
+-- 4. 로직: 구역 폐쇄 시 예약 취소
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_cancel_reservations_on_zone_close()
 RETURNS TRIGGER AS $$
@@ -154,7 +151,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_cancel_reservations_on_zone_close();
 
 -- =====================================================================
--- 5. 로직: 공유 일정 변경/삭제 시 관련 예약 취소
+-- 5. 로직: 스케줄 변경 시 예약 취소
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_cancel_reservations_on_schedule_change()
 RETURNS TRIGGER AS $$
@@ -163,9 +160,7 @@ BEGIN
     SET Status = 'Canceled'
     WHERE ShareID = OLD.ShareID
       AND Status IN ('Pending', 'Approved');
-      
-    IF (TG_OP = 'DELETE') THEN RETURN OLD;
-    ELSE RETURN NEW; END IF;
+    IF (TG_OP = 'DELETE') THEN RETURN OLD; ELSE RETURN NEW; END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -175,7 +170,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_cancel_reservations_on_schedule_change();
 
 -- =====================================================================
--- 6. 로직: 예약 유효성 검사 (중복/폐쇄/시간) - 취소 시엔 패스
+-- 6. 로직: 예약 유효성 검사 (취소 시 패스 기능 포함)
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_validate_reservation()
 RETURNS TRIGGER AS $$
@@ -185,10 +180,7 @@ DECLARE
     v_zone_status VARCHAR(10);
     v_overlap_count INT;
 BEGIN
-    -- 취소/완료 상태 변경 시에는 검사 건너뜀
-    IF NEW.Status IN ('Canceled', 'Completed') THEN
-        RETURN NEW;
-    END IF;
+    IF NEW.Status IN ('Canceled', 'Completed') THEN RETURN NEW; END IF;
 
     SELECT ShareStartTime, ShareEndTime INTO v_share_start, v_share_end
     FROM ShareSchedule WHERE ShareID = NEW.ShareID;
@@ -228,7 +220,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_validate_reservation();
 
 -- =====================================================================
--- 7. 로직: 게이트 입출차 자동 제어 (입차: 예약확인, 출차: 무조건승인)
+-- [핵심 수정됨] 7. 로직: 게이트 제어 (입주민 프리패스 + 방문자 예약확인)
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_gate_access_control()
 RETURNS TRIGGER AS $$
@@ -236,7 +228,7 @@ DECLARE
     v_reservation_id INT;
     v_user_role VARCHAR(10);
 BEGIN
-    -- 1. 사용자 역할 확인 (입주민인지?)
+    -- 1. 사용자 역할 확인
     SELECT Role INTO v_user_role FROM "User" WHERE VehicleID = NEW.VehicleID;
 
     -- [입차 로직]
@@ -266,7 +258,6 @@ BEGIN
     ELSIF NEW.Action = 'Exit' THEN
         NEW.Status := 'Approved'; -- 출차는 항상 승인
         
-        -- 방문자였으면 예약 상태 업데이트를 위해 ID 찾기
         IF v_user_role = 'Visitor' THEN
             SELECT ReservationID INTO v_reservation_id
             FROM Reservation
@@ -279,21 +270,35 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE TRIGGER tr_gate_access_control_before
+BEFORE INSERT ON GateLog
+FOR EACH ROW
+EXECUTE FUNCTION fn_gate_access_control();
+
 -- =====================================================================
--- 8. 로직: 게이트 통과 후 예약 상태 자동 변경 (InUse / Completed)
+-- 8. 로직: 게이트 통과 후 예약 상태 변경
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_update_reservation_status_after_gate()
 RETURNS TRIGGER AS $$
 BEGIN
+    -- 1. 입차(Entry) 시 -> 'InUse' (사용 중)
     IF NEW.Action = 'Entry' AND NEW.Status IN ('Automatic', 'Approved') AND NEW.ReservationID IS NOT NULL THEN
         UPDATE Reservation
         SET Status = 'InUse'
         WHERE ReservationID = NEW.ReservationID;
         
+    -- 2. 출차(Exit) 시 -> 조건에 따라 분기
     ELSIF NEW.Action = 'Exit' AND NEW.Status = 'Approved' AND NEW.ReservationID IS NOT NULL THEN
+        
         UPDATE Reservation
-        SET Status = 'Completed'
+        SET Status = CASE 
+            -- (A) 아직 예약 종료 시간이 안 지났으면 -> 'Approved'로 되돌림 (재입차 가능)
+            WHEN NOW() < ReserveEndTime THEN 'Approved'
+            -- (B) 예약 시간이 끝났으면 -> 'Completed' (완료 처리)
+            ELSE 'Completed'
+        END
         WHERE ReservationID = NEW.ReservationID;
+        
     END IF;
     
     RETURN NEW;
