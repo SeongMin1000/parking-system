@@ -24,7 +24,7 @@
         .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .card-header { font-size: 16px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
 
-        /* 1. 승인 대기 패널 (중요) */
+        /* 1. 승인 대기 패널 */
         .pending-box { border-left: 5px solid #e67e22; }
         .request-item { background-color: #fdf2e9; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
         .req-info { font-size: 14px; }
@@ -35,8 +35,8 @@
         /* 2. 구역 제어 패널 */
         .zone-controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
         .zone-toggle { padding: 15px; border: 1px solid #ddd; border-radius: 8px; text-align: center; cursor: pointer; transition: 0.2s; }
-        .zone-toggle.active { background-color: #e8f8f5; border-color: #2ecc71; color: #27ae60; } /* Available */
-        .zone-toggle.closed { background-color: #fadbd8; border-color: #e74c3c; color: #c0392b; } /* Closed */
+        .zone-toggle.active { background-color: #e8f8f5; border-color: #2ecc71; color: #27ae60; }
+        .zone-toggle.closed { background-color: #fadbd8; border-color: #e74c3c; color: #c0392b; }
         .zone-name { font-weight: bold; font-size: 18px; display: block; }
         .zone-status { font-size: 12px; }
 
@@ -63,7 +63,7 @@
                 <h1>🛡️ 통합 관제 센터 <span class="admin-badge">ADMIN</span></h1>
             </div>
             <div>
-                <a href="/" target="_blank" style="text-decoration: none; color: #3498db; margin-right: 15px; font-size: 14px;">실시간 현황판 보기</a>
+                <a href="/" style="text-decoration: none; color: #3498db; margin-right: 15px; font-size: 14px;">실시간 현황판 보기</a>
                 <button class="logout" onclick="logout()">로그아웃</button>
             </div>
         </div>
@@ -112,15 +112,13 @@
                 </div>
             </div>
             <table id="logTable">
-                <thead>
-                    </thead>
-                <tbody>
-                    </tbody>
+                <thead></thead>
+                <tbody></tbody>
             </table>
         </div>
     </div>
+
     <script>
-        // 0. 초기화 및 권한 체크
         const vehicleId = sessionStorage.getItem('vehicleId');
         const role = sessionStorage.getItem('role');
 
@@ -136,7 +134,6 @@
             if (!dateString) return '-';
             const date = new Date(dateString);
             
-            // UTC 메서드를 사용하여 서버에서 보낸 원본 숫자만 추출
             const year = date.getUTCFullYear();
             const month = String(date.getUTCMonth() + 1).padStart(2, '0');
             const day = String(date.getUTCDate()).padStart(2, '0');
@@ -146,17 +143,13 @@
             return `${year}-${month}-${day} ${hour}:${min}`;
         }
 
-        // 초기 데이터 로드
         loadPendingRequests();
         loadZones();
         loadLogs();
 
-        // 주기적 폴링 (승인 대기 목록 갱신) - 3초마다
         setInterval(loadPendingRequests, 3000);
 
-        // ===========================
-        // 1. 입차 승인 대기 목록 로드 (Timestamp 수정)
-        // ===========================
+        // 1. 승인 대기
         async function loadPendingRequests() {
             try {
                 const response = await fetch('/admin/pending-requests');
@@ -170,8 +163,8 @@
 
                 listDiv.innerHTML = '';
                 data.requests.forEach(req => {
-                    // [수정] formatTimeRaw 적용
-                    const displayTime = formatTimeRaw(req.timestamp); 
+                    // 시간 포맷 적용
+                    const displayTime = formatTimeRaw(req.timestamp);
                     const div = document.createElement('div');
                     div.className = 'request-item';
                     div.innerHTML = `
@@ -186,7 +179,6 @@
             } catch (e) { console.error(e); }
         }
 
-        // 입차 승인 실행 (로직 유지)
         async function approveRequest(logId) {
             if(!confirm('해당 차량의 입차를 승인하시겠습니까?')) return;
             try {
@@ -205,9 +197,7 @@
             } catch (e) { alert('오류 발생'); }
         }
 
-        // ===========================
-        // 2. 구역 목록 로드 및 제어 (로직 유지)
-        // ===========================
+        // 2. 구역
         async function loadZones() {
             try {
                 const response = await fetch('/zones');
@@ -230,12 +220,11 @@
             } catch (e) { console.error(e); }
         }
 
-        // 구역 상태 변경 (로직 유지)
         async function toggleZoneStatus(zoneId, currentStatus) {
             const newStatus = currentStatus === 'Available' ? 'Closed' : 'Available';
             const actionName = newStatus === 'Closed' ? '폐쇄' : '해제(운영재개)';
             
-            if(!confirm(`정말로 구역 상태를 '${actionName}' 하시겠습니까?\n(폐쇄 시 관련 예약이 모두 취소될 수 있습니다)`)) return;
+            if(!confirm(`정말로 구역 상태를 '${actionName}' 하시겠습니까?`)) return;
 
             try {
                 const response = await fetch(`/zone/${zoneId}`, {
@@ -252,15 +241,30 @@
             } catch (e) { alert('오류 발생'); }
         }
 
-        // ===========================
-        // 4. 로그 조회 (Timestamp/Time 수정)
-        // ===========================
+        // 3. 게이트
+        async function forceOpenGate(gateId) {
+            if(!confirm(`Gate ${gateId}번을 강제로 개방하시겠습니까?`)) return;
+            try {
+                const response = await fetch(`/gate/${gateId}/open`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ AdminVehicleID: vehicleId })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    alert('게이트 개방 명령을 전송했습니다.');
+                } else {
+                    alert(data.error);
+                }
+            } catch (e) { alert('오류 발생'); }
+        }
+
+        // 4. 로그
         async function loadLogs() {
             const type = document.getElementById('logType').value;
             const tableHead = document.querySelector('#logTable thead');
             const tableBody = document.querySelector('#logTable tbody');
             
-            // 헤더 설정
             if (type === 'gate') {
                 tableHead.innerHTML = '<tr><th>시간</th><th>차량번호</th><th>행동</th><th>상태</th><th>게이트</th></tr>';
             } else {
@@ -276,9 +280,8 @@
 
                 logs.forEach(log => {
                     const tr = document.createElement('tr');
-                    
                     if (type === 'gate') {
-                        // [수정] formatTimeRaw 적용
+                        // 시간 포맷 적용
                         const displayTime = formatTimeRaw(log.timestamp);
                         const actionClass = log.action === 'Entry' ? 'log-entry' : 'log-exit';
                         tr.innerHTML = `
@@ -289,7 +292,7 @@
                             <td>Gate ${log.gateid}</td>
                         `;
                     } else {
-                        // [수정] formatTimeRaw 적용
+                        // 시간 포맷 적용
                         const displayTime = formatTimeRaw(log.reservestarttime);
                         tr.innerHTML = `
                             <td>${displayTime}</td>
