@@ -564,24 +564,38 @@ def get_my_shares():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # [수정됨] is_deletable 조건 완화
-        # 기존: 'InUse', 'Completed'가 있으면 삭제 불가
-        # 변경: 오직 'InUse'(현재 사용 중)인 경우에만 삭제 불가 (과거 기록 있어도 삭제 가능)
+        # [수정됨] ShareStartTime/EndTime도 예약 데이터와 똑같이 '문자열 포맷'으로 통일
+        # 이렇게 해야 프론트엔드에서 시차(Timezone) 문제없이 정확한 % 계산이 가능함
         query = sql.SQL("""
             SELECT 
                 ss.ShareID,
                 ss.SpaceID,
-                ss.ShareStartTime,
-                ss.ShareEndTime,
+                -- [핵심 수정] datetime 객체가 아니라 문자열로 변환해서 반환
+                to_char(ss.ShareStartTime, 'YYYY-MM-DD"T"HH24:MI:SS') as sharestarttime,
+                to_char(ss.ShareEndTime, 'YYYY-MM-DD"T"HH24:MI:SS') as shareendtime,
+                
+                COALESCE(
+                    json_agg(
+                        json_build_object(
+                            'start', to_char(r.ReserveStartTime, 'YYYY-MM-DD"T"HH24:MI:SS'),
+                            'end', to_char(r.ReserveEndTime, 'YYYY-MM-DD"T"HH24:MI:SS'),
+                            'status', r.Status,
+                            'visitor', r.VisitorVehicleID
+                        ) ORDER BY r.ReserveStartTime
+                    ) FILTER (WHERE r.ReservationID IS NOT NULL AND r.Status IN ('Approved', 'InUse', 'Completed')),
+                    '[]'
+                ) as bookings,
+                
                 (
                     SELECT COUNT(*)
-                    FROM Reservation r
-                    WHERE r.ShareID = ss.ShareID
-                    AND r.Status = 'InUse' -- <--- 여기를 수정했습니다 ('Completed' 제거)
+                    FROM Reservation r2
+                    WHERE r2.ShareID = ss.ShareID AND r2.Status = 'InUse'
                 ) = 0 AS is_deletable
             FROM ShareSchedule ss
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            LEFT JOIN Reservation r ON ss.ShareID = r.ShareID
             WHERE ps.OwnerVehicleID = %s
+            GROUP BY ss.ShareID, ss.SpaceID, ss.ShareStartTime, ss.ShareEndTime, ps.SpaceID
             ORDER BY ss.ShareStartTime DESC;
         """)
         
@@ -591,7 +605,7 @@ def get_my_shares():
         return jsonify(shares=shares), 200
 
     except Exception as e:
-        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
+        return jsonify(error="서버 내부 오류", details=str(e)), 500
     finally:
         conn.close()
 

@@ -48,6 +48,34 @@
         .status-expired { background-color: #f2f3f4; color: #95a5a6; }
         .btn-delete { background-color: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
         .btn-delete:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+
+        /* 타임라인 바 스타일 */
+        .timeline-container {
+            position: relative;
+            width: 100%;
+            height: 20px;
+            background-color: #ecf0f1; /* 빈 공간 (회색) */
+            border-radius: 10px;
+            margin-top: 8px;
+            overflow: hidden;
+            border: 1px solid #bdc3c7;
+        }
+        .timeline-segment {
+            position: absolute;
+            height: 100%;
+            top: 0;
+            font-size: 10px;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        /* 예약 상태별 색상 */
+        .seg-Approved { background-color: #f39c12; } /* 예약됨 (주황) */
+        .seg-InUse { background-color: #3498db; }    /* 사용중 (파랑) */
+        .seg-Completed { background-color: #95a5a6; }/* 완료됨 (회색) */
     </style>
 </head>
 <body>
@@ -269,33 +297,56 @@
                 data.shares.forEach(item => {
                     const displayStart = formatTimeRaw(item.sharestarttime);
                     const displayEnd = formatTimeRaw(item.shareendtime);
-                    const endDateObj = new Date(item.shareendtime);
-                    const nowTime = new Date();
+                    const canDelete = item.is_deletable; 
 
-                    let statusClass = 'status-active';
-                    let statusText = '공유 중';
-                    if (endDateObj < nowTime) {
-                        statusClass = 'status-expired';
-                        statusText = '종료됨';
+                    // [타임라인 생성 로직]
+                    // 1. 전체 공유 시간(분 단위) 계산
+                    const shareStart = new Date(item.sharestarttime);
+                    const shareEnd = new Date(item.shareendtime);
+                    const totalMinutes = (shareEnd - shareStart) / 1000 / 60;
+
+                    // 2. 예약된 조각(Segment)들 HTML 생성
+                    let timelineHTML = '';
+                    if (item.bookings && item.bookings.length > 0) {
+                        item.bookings.forEach(book => {
+                            const bookStart = new Date(book.start);
+                            const bookEnd = new Date(book.end);
+                            
+                            // 시작 지점(%)과 너비(%) 계산
+                            const startDiff = (bookStart - shareStart) / 1000 / 60;
+                            const duration = (bookEnd - bookStart) / 1000 / 60;
+                            
+                            const leftPercent = (startDiff / totalMinutes) * 100;
+                            const widthPercent = (duration / totalMinutes) * 100;
+
+                            timelineHTML += `<div class="timeline-segment seg-${book.status}" 
+                                                  style="left: ${leftPercent}%; width: ${widthPercent}%;"
+                                                  title="${book.visitor} (${book.status})">
+                                             </div>`;
+                        });
                     }
 
-                    const canDelete = item.is_deletable; 
-                    
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
-                        <td>${displayStart} <br>~ ${displayEnd}</td>
-                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-                        <td>${canDelete ? '없음(대기중)' : '<span style="color:blue; font-weight:bold;">예약됨</span>'}</td>
+                        <td>
+                            <div>${displayStart} ~ ${displayEnd}</div>
+                            <div class="timeline-container" title="회색:빈공간 / 주황:예약 / 파랑:사용중">
+                                ${timelineHTML}
+                            </div>
+                        </td>
+                        <td><span class="status-badge status-active">공유 중</span></td>
+                        <td>${item.bookings.length > 0 ? `${item.bookings.length}건 예약` : '없음'}</td>
                         <td>
                             <button class="btn-delete" 
                                 onclick="deleteSchedule(${item.shareid})" 
-                                ${!canDelete ? 'disabled title="이용 중인 예약이 있어 삭제할 수 없습니다"' : ''}>
+                                ${!canDelete ? 'disabled title="사용 중인 예약이 있어 삭제 불가"' : ''}>
                                 삭제
                             </button>
                         </td>
                     `;
                     tbody.appendChild(tr);
                 });
+
             } catch (error) { console.error(error); }
         }
 
