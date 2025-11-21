@@ -25,23 +25,31 @@ DROP FUNCTION IF EXISTS fn_is_vehicle_in;
 DROP FUNCTION IF EXISTS fn_check_past_time_share;
 
 -- =====================================================================
--- 1. 유틸리티 함수: 차량 주차 여부 확인 (필수)
+-- [수정됨] 1. 유틸리티 함수: 차량 주차 여부 확인
+-- 변경사항: 'PendingApproval'(대기)나 'Denied'(거절) 상태는 무시하고,
+--          실제로 게이트가 열린('Automatic', 'Approved') 기록만 기준으로 판단함.
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_is_vehicle_in(p_vehicle_id VARCHAR)
 RETURNS BOOLEAN AS $$
 DECLARE
     v_last_action VARCHAR(5);
 BEGIN
-    IF p_vehicle_id IS NULL THEN RETURN FALSE; END IF;
+    IF p_vehicle_id IS NULL THEN
+        RETURN FALSE;
+    END IF;
 
+    -- [핵심 수정] 승인된(Automatic, Approved) 기록 중에서 가장 최신 상태를 조회
     SELECT Action INTO v_last_action
     FROM GateLog
     WHERE VehicleID = p_vehicle_id
+      AND Status IN ('Automatic', 'Approved') -- 문이 실제로 열린 경우만 인정
     ORDER BY Timestamp DESC
     LIMIT 1;
 
+    -- 기록이 없거나, 마지막 유효 기록이 'Exit'이면 -> 밖에 있음(FALSE)
     IF v_last_action IS NULL OR v_last_action = 'Exit' THEN
         RETURN FALSE;
+    -- 마지막 유효 기록이 'Entry'이면 -> 안에 있음(TRUE)
     ELSE
         RETURN TRUE;
     END IF;
