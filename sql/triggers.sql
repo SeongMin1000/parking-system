@@ -169,9 +169,7 @@ AFTER UPDATE OR DELETE ON ShareSchedule
 FOR EACH ROW
 EXECUTE FUNCTION fn_cancel_reservations_on_schedule_change();
 
--- =====================================================================
--- 6. 로직: 예약 유효성 검사 (취소 시 패스 기능 포함)
--- =====================================================================
+-- [수정됨] 로직 6: 예약 유효성 검사 (과거 예약 방지 추가)
 CREATE OR REPLACE FUNCTION fn_validate_reservation()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -180,8 +178,19 @@ DECLARE
     v_zone_status VARCHAR(10);
     v_overlap_count INT;
 BEGIN
-    IF NEW.Status IN ('Canceled', 'Completed') THEN RETURN NEW; END IF;
+    -- 1. 취소/완료 상태 변경 시에는 검사 건너뜀
+    IF NEW.Status IN ('Canceled', 'Completed') THEN
+        RETURN NEW;
+    END IF;
 
+    -- [핵심 추가] 2. 과거 시간 예약 방지
+    -- (단, 'InUse' 상태로 업데이트 되는 경우(입차처리)는 이미 시간이 지났을 수 있으므로 제외)
+    -- 'Pending'이나 'Approved' 상태로 새로 들어오거나 변경될 때만 체크
+    IF NEW.Status IN ('Pending', 'Approved') AND NEW.ReserveStartTime < CURRENT_TIMESTAMP THEN
+        RAISE EXCEPTION '이미 지나간 과거 시간에는 예약할 수 없습니다.';
+    END IF;
+
+    -- 3. 공유 시간 범위 확인
     SELECT ShareStartTime, ShareEndTime INTO v_share_start, v_share_end
     FROM ShareSchedule WHERE ShareID = NEW.ShareID;
 
@@ -189,6 +198,7 @@ BEGIN
         RAISE EXCEPTION '예약 시간이 공유 가능 시간을 벗어납니다.';
     END IF;
 
+    -- 4. 구역 폐쇄 여부 확인
     SELECT pz.Status INTO v_zone_status
     FROM ParkingZone pz
     JOIN ParkingSpace ps ON pz.ZoneID = ps.ZoneID
@@ -199,6 +209,7 @@ BEGIN
         RAISE EXCEPTION '해당 주차 구역은 현재 폐쇄 상태입니다.';
     END IF;
 
+    -- 5. 중복 예약 확인
     SELECT COUNT(*) INTO v_overlap_count
     FROM Reservation
     WHERE ShareID = NEW.ShareID
@@ -352,3 +363,25 @@ CREATE TRIGGER tr_update_reservation_status_after_gate
 AFTER INSERT ON GateLog
 FOR EACH ROW
 EXECUTE FUNCTION fn_update_reservation_status_after_gate();
+
+-- [신규] 로직: 과거 시간 공유 등록 방지 트리거
+CREATE OR REPLACE FUNCTION fn_check_past_time_share()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- 시작 시간이 현재 시간보다 이전이면 에러 (약간의 오차 허용 없이 엄격하게)
+    -- 수정(UPDATE)시에도 과거로 바꾸는 건 금지
+    IF NEW.ShareStartTime < CURRENT_TIMESTAMP THEN
+        RAISE EXCEPTION '이미 지나간 과거 시간에는 공유 일정을 등록할 수 없습니다.';
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 트리거 연결 (INSERT 또는 UPDATE 시 작동)
+DROP TRIGGER IF EXISTS tr_check_past_time_share ON ShareSchedule;
+
+CREATE TRIGGER tr_check_past_time_share
+BEFORE INSERT OR UPDATE ON ShareSchedule
+FOR EACH ROW
+EXECUTE FUNCTION fn_check_past_time_share();
