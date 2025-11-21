@@ -139,7 +139,7 @@
                     <thead>
                         <tr>
                             <th>방문 차량</th>
-                            <th>이용 시간</th>
+                            <th>연락처</th> <th>이용 시간</th>
                             <th>상태</th>
                         </tr>
                     </thead>
@@ -332,13 +332,16 @@
 
                 data.history.forEach(item => {
                     const tr = document.createElement('tr');
-                    // Status 별 색상 스타일 (선택사항)
                     let statusColor = 'gray';
                     if(item.status === 'InUse') statusColor = 'blue';
                     if(item.status === 'Approved') statusColor = 'orange';
+                    
+                    // [추가] 방문자 연락처
+                    const visitorPhone = item.visitorcontact || '-';
 
                     tr.innerHTML = `
                         <td><strong>${item.visitorvehicleid}</strong></td>
+                        <td>${visitorPhone}</td>
                         <td>${item.start_time} ~ ${item.end_time}</td>
                         <td><span style="color:${statusColor}; font-weight:bold;">${item.status}</span></td>
                     `;

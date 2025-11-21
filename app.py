@@ -42,7 +42,7 @@ def register_page(): return render_template('register.html')
 
 
 # ========================================
-# 1. 사용자 회원가입 (POST /register)
+# 1. 사용자 회원가입 (POST /register) - 수정됨
 # ========================================
 @app.route('/register', methods=['POST'])
 def register_user():
@@ -52,12 +52,15 @@ def register_user():
         password = data['Password']
         name = data['Name']
         role = data['Role']
-        contact = data.get('Contact')
+        contact = data.get('Contact') # 필수값
         building = data.get('Building') if role == 'Resident' else None
     except Exception as e:
         return jsonify(error="데이터 누락", details=str(e)), 400
 
-    # 차량번호 정규식 검사
+    # [추가] 연락처 누락 검사
+    if not contact or contact.strip() == "":
+        return jsonify(error="비상 연락처는 필수 입력 항목입니다."), 400
+
     if not re.match(r'^\d{2}[가-힣]\d{4}$', vehicleid):
         return jsonify(error="차량번호 형식이 올바르지 않습니다. (예: 12가3456)"), 400
 
@@ -70,7 +73,6 @@ def register_user():
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # DB 트리거(tr_assign_specific_space)가 자동으로 주차 공간을 할당하거나 에러를 발생시킴
         cur.execute(
             'INSERT INTO "User" (VehicleID, Password, Name, Role, Contact, Building) VALUES (%s, %s, %s, %s, %s, %s)',
             (vehicleid, hashed_password.decode('utf-8'), name, role, contact, building)
@@ -81,10 +83,8 @@ def register_user():
 
     except psycopg2.Error as e:
         if conn: conn.rollback()
-        if e.pgcode == 'P0001': # 트리거에서 발생시킨 사용자 정의 에러
-            return jsonify(error="주차 공간 할당 실패", details=e.diag.message_primary), 400
-        if e.pgcode == '23505':
-            return jsonify(error="이미 가입된 차량번호입니다."), 409
+        if e.pgcode == 'P0001': return jsonify(error="주차 공간 할당 실패", details=e.diag.message_primary), 400
+        if e.pgcode == '23505': return jsonify(error="이미 가입된 차량번호입니다."), 409
         return jsonify(error="데이터베이스 오류", details=str(e)), 500
     finally:
         if conn: conn.close()
@@ -500,7 +500,7 @@ def delete_share_schedule(schedule_id):
         conn.close()
 
 # ===============================================================
-# 14. 방문자: 내 예약 내역 조회 (GET /my-reservations)
+# 14. 방문자: 내 예약 내역 조회 (GET /my-reservations) - 수정됨
 # ===============================================================
 @app.route('/my-reservations', methods=['GET'])
 def get_my_reservations():
@@ -511,17 +511,19 @@ def get_my_reservations():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # [수정] ps.SpaceNumber 추가
+        # [수정] 입주민(Owner)의 연락처(Contact)를 조인하여 가져옴
         cur.execute("""
             SELECT 
                 r.*, 
                 pz.ZoneName, 
                 ps.SpaceID,
-                ps.SpaceNumber -- <--- 여기 추가됨!
+                ps.SpaceNumber,
+                u.Contact AS OwnerContact -- 주차장 주인의 연락처
             FROM Reservation r
             JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
             JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            JOIN "User" u ON ps.OwnerVehicleID = u.VehicleID -- 주인 정보 조인
             WHERE r.VisitorVehicleID = %s
             ORDER BY r.ReserveStartTime DESC
         """, (vid,))
@@ -716,7 +718,7 @@ def open_gate(gate_id):
         conn.close()
 
 # ===============================================================
-# 22. [신규] 입주민: 내 공간 이용 내역 조회 (GET /my-space-history)
+# 22. 입주민: 내 공간 이용 내역 조회 (GET /my-space-history) - 수정됨
 # ===============================================================
 @app.route('/my-space-history', methods=['GET'])
 def get_my_space_history():
@@ -727,19 +729,20 @@ def get_my_space_history():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 입주민의 공간을 예약했던 기록 조회 (최신순 20개)
-        # VisitorVehicleID(누가), 시간, 상태를 가져옴
+        # [수정] 방문자(Visitor)의 연락처(Contact)를 조인하여 가져옴
         query = sql.SQL("""
             SELECT 
                 r.VisitorVehicleID,
                 to_char(r.ReserveStartTime, 'YYYY-MM-DD HH24:MI') as start_time,
-                to_char(r.ReserveEndTime, 'HH24:MI') as end_time, -- 종료는 시간만 표시 (공간 절약)
-                r.Status
+                to_char(r.ReserveEndTime, 'HH24:MI') as end_time,
+                r.Status,
+                u.Contact AS VisitorContact -- 방문자의 연락처
             FROM Reservation r
             JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            JOIN "User" u ON r.VisitorVehicleID = u.VehicleID -- 방문자 정보 조인
             WHERE ps.OwnerVehicleID = %s
-              AND r.Status IN ('Completed', 'InUse', 'Approved') -- 유효한 예약만 조회
+              AND r.Status IN ('Completed', 'InUse', 'Approved')
             ORDER BY r.ReserveStartTime DESC
             LIMIT 20;
         """)

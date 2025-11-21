@@ -16,7 +16,7 @@ CREATE TABLE "User" (
     Password VARCHAR(255) NOT NULL,
     Name VARCHAR(100) NOT NULL,
     Role VARCHAR(10) NOT NULL CHECK (Role IN ('Resident', 'Visitor', 'Admin')),
-    Contact VARCHAR(100),
+    Contact VARCHAR(100) NOT NULL,
     Building VARCHAR(100) -- 입주민의 경우 거주하는 동 (예: '101동')
 );
 

@@ -10,6 +10,7 @@ DROP TRIGGER IF EXISTS tr_validate_reservation ON Reservation;
 DROP TRIGGER IF EXISTS tr_gate_access_control_before ON GateLog;
 DROP TRIGGER IF EXISTS tr_update_reservation_status_after_gate ON GateLog;
 DROP TRIGGER IF EXISTS tr_check_resident_return ON GateLog;
+DROP TRIGGER IF EXISTS tr_check_past_time_share ON ShareSchedule;
 
 DROP FUNCTION IF EXISTS fn_check_owner_role;
 DROP FUNCTION IF EXISTS fn_assign_specific_space;
@@ -21,6 +22,7 @@ DROP FUNCTION IF EXISTS fn_gate_access_control;
 DROP FUNCTION IF EXISTS fn_update_reservation_status_after_gate;
 DROP FUNCTION IF EXISTS fn_check_resident_return;
 DROP FUNCTION IF EXISTS fn_is_vehicle_in;
+DROP FUNCTION IF EXISTS fn_check_past_time_share;
 
 -- =====================================================================
 -- 1. 유틸리티 함수: 차량 주차 여부 확인 (필수)

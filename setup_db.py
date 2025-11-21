@@ -29,9 +29,6 @@ def setup_database():
 
         # --- 1. 주차 구역 생성 (중복 방지) ---
         print("1. 주차 구역(ParkingZone) 생성 중...")
-        # 트리거 로직('a-1' 파싱)과 UI 가독성을 위해 'A구역' 형태로 저장하는 것을 권장하지만,
-        # 트리거가 'A'와 'A구역' 모두 처리하므로 'A'로 저장해도 무방합니다.
-        # 여기서는 명확하게 'A', 'B'... 로 저장합니다.
         canonical_zones = ['A', 'B', 'C', 'D']
         
         zone_map = {} # { 'A': 1, 'B': 2 ... }
@@ -58,14 +55,13 @@ def setup_database():
         conn.commit()
         print("   => 주차 구역 설정 완료.\n")
 
-        # --- 2. 주차 공간 생성 (수정된 안전한 로직) ---
+        # --- 2. 주차 공간 생성 (안전한 로직) ---
         print(f"2. 주차 공간(ParkingSpace) 10개씩 체크 및 생성 중...")
         
         for c_zone in canonical_zones:
             zone_id = zone_map[c_zone]
             created_count = 0
             
-            # [수정] 단순 개수(COUNT)가 아니라 1~10번 자리가 각각 있는지 확인합니다.
             for space_num in range(1, 11): # 1부터 10까지 반복
                 cur.execute(
                     "SELECT 1 FROM ParkingSpace WHERE ZoneID = %s AND SpaceNumber = %s",
@@ -104,15 +100,16 @@ def setup_database():
         conn.commit()
         print("   => 게이트 설정 완료.\n")
         
-        # --- 4. 관리자 계정 생성 ---
+        # --- 4. 관리자 계정 생성 (수정됨: Contact 추가) ---
         admin_id = 'admin'
         cur.execute('SELECT VehicleID FROM "User" WHERE VehicleID = %s', (admin_id,))
         if cur.fetchone() is None:
             hashed = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            # DDL상 Contact, Building은 Nullable이므로 생략 가능
+            
+            # [수정] Contact 컬럼과 값('010-0000-0000')을 추가
             cur.execute(
-                'INSERT INTO "User" (VehicleID, Password, Name, Role) VALUES (%s, %s, %s, %s)',
-                (admin_id, hashed, '시스템관리자', 'Admin')
+                'INSERT INTO "User" (VehicleID, Password, Name, Role, Contact) VALUES (%s, %s, %s, %s, %s)',
+                (admin_id, hashed, '시스템관리자', 'Admin', '010-0000-0000')
             )
             print(f"   - 관리자 계정({admin_id}) 생성 완료.")
         else:

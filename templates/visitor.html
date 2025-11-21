@@ -128,7 +128,7 @@
                     <tr>
                         <th>구역</th>
                         <th>예약 시간</th>
-                        <th>상태</th>
+                        <th>입주민 연락처</th> <th>상태</th>
                         <th>작업</th>
                     </tr>
                 </thead>
@@ -317,18 +317,20 @@
                     return;
                 }
 
+                // [수정] 테이블 헤더에 '입주민 연락처' 컬럼이 추가되었다고 가정하고, 데이터 바인딩 수정
                 data.reservations.forEach(res => {
                     const start = formatTimeRaw(res.reservestarttime);
                     const end = formatTimeRaw(res.reserveendtime);
-                    
                     const canCancel = res.status === 'Approved';
+                    
+                    // [추가] 입주민 연락처 (없으면 '-')
+                    const ownerPhone = res.ownercontact || '-';
 
                     const tr = document.createElement('tr');
-                    
-                    // [수정] res.zonename 뒤에 res.spacenumber 추가
                     tr.innerHTML = `
                         <td><strong>${res.zonename} - ${res.spacenumber}번</strong></td>
                         <td>${start} ~ ${end}</td>
+                        <td style="color:#2980b9; font-weight:bold;">${ownerPhone}</td>
                         <td><span class="status-badge status-${res.status}">${res.status}</span></td>
                         <td>
                             ${canCancel ? `<button class="btn-cancel" onclick="cancelReservation(${res.reservationid})">취소</button>` : '-'}
