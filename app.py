@@ -563,15 +563,35 @@ def get_my_shares():
     conn = get_db_connection()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT ss.*, 
-            (SELECT COUNT(*) FROM Reservation r WHERE r.ShareID = ss.ShareID AND r.Status IN ('InUse', 'Completed')) = 0 AS is_deletable
+
+        # [수정됨] is_deletable 조건 완화
+        # 기존: 'InUse', 'Completed'가 있으면 삭제 불가
+        # 변경: 오직 'InUse'(현재 사용 중)인 경우에만 삭제 불가 (과거 기록 있어도 삭제 가능)
+        query = sql.SQL("""
+            SELECT 
+                ss.ShareID,
+                ss.SpaceID,
+                ss.ShareStartTime,
+                ss.ShareEndTime,
+                (
+                    SELECT COUNT(*)
+                    FROM Reservation r
+                    WHERE r.ShareID = ss.ShareID
+                    AND r.Status = 'InUse' -- <--- 여기를 수정했습니다 ('Completed' 제거)
+                ) = 0 AS is_deletable
             FROM ShareSchedule ss
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
             WHERE ps.OwnerVehicleID = %s
-            ORDER BY ss.ShareStartTime DESC
-        """, (vid,))
-        return jsonify(shares=cur.fetchall()), 200
+            ORDER BY ss.ShareStartTime DESC;
+        """)
+        
+        cur.execute(query, (vid,))
+        shares = cur.fetchall()
+        
+        return jsonify(shares=shares), 200
+
+    except Exception as e:
+        return jsonify(error="서버 내부 오류가 발생했습니다.", details=str(e)), 500
     finally:
         conn.close()
 

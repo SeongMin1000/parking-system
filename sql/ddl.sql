@@ -72,7 +72,7 @@ CREATE TABLE Reservation (
     ReserveEndTime TIMESTAMP NOT NULL,
     Status VARCHAR(10) NOT NULL DEFAULT 'Pending' CHECK (Status IN ('Pending', 'Approved', 'InUse', 'Completed', 'Canceled')),
     
-    FOREIGN KEY (ShareID) REFERENCES ShareSchedule(ShareID),
+    FOREIGN KEY (ShareID) REFERENCES ShareSchedule(ShareID) ON DELETE CASCADE,
     FOREIGN KEY (VisitorVehicleID) REFERENCES "User"(VehicleID),
     
     CHECK (ReserveEndTime > ReserveStartTime),
@@ -106,7 +106,7 @@ CREATE TABLE GateLog (
     -- Denied: 거절됨
     Status VARCHAR(20) NOT NULL CHECK (Status IN ('Automatic', 'PendingApproval', 'Approved', 'Denied')),
     
-    FOREIGN KEY (ReservationID) REFERENCES Reservation(ReservationID),
+    FOREIGN KEY (ReservationID) REFERENCES Reservation(ReservationID) ON DELETE SET null,
     FOREIGN KEY (GateID) REFERENCES Gate(GateID),
     FOREIGN KEY (VehicleID) REFERENCES "User"(VehicleID)
 );
