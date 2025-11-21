@@ -382,7 +382,6 @@ def parking_status():
                     -- [핵심 수정] 입주민: 실제로 주차장에 있고(fn_is_vehicle_in) + "공유 시간이 아닐 때만" 표시
                     WHEN ps.OwnerVehicleID IS NOT NULL 
                          AND fn_is_vehicle_in(ps.OwnerVehicleID) = TRUE
-                         AND NOT EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) -- 공유 시간엔 차 숨김
                     THEN TRUE
                     
                     ELSE FALSE
