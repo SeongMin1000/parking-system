@@ -6,18 +6,16 @@
     <title>입주민 대시보드 - 주차장 관리 시스템</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        /* 공통 스타일 */
         body { font-family: 'Noto Sans KR', sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; }
-        
         .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
         h1, h2 { margin: 0; color: #2c3e50; }
         button.logout { background-color: #e74c3c; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
-
+        
         .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .card-title { font-size: 18px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 20px; color: #34495e; }
-
-        /* 게이트 시뮬레이션 패널 (추가됨) */
+        .card-title { font-size: 18px; font-weight: bold; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 20px; color: #34495e; display:flex; justify-content:space-between; align-items:center; }
+        
+        /* 게이트 시뮬레이션 */
         .gate-simulation { background-color: #2c3e50; color: white; }
         .gate-simulation .card-title { color: #ecf0f1; border-color: #34495e; }
         .gate-controls { display: flex; gap: 20px; justify-content: center; margin-top: 20px; }
@@ -37,45 +35,29 @@
         label { font-size: 12px; color: #666; margin-bottom: 5px; }
         input, select { padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
         button.primary { background-color: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; height: 38px; }
-        button.primary:hover { background-color: #2980b9; }
-
-        /* 테이블 */
+        
+        /* 테이블 & 타임라인 */
         table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
         th { background-color: #f8f9fa; color: #666; }
+        
         .status-badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
         .status-active { background-color: #e8f8f5; color: #2ecc71; } 
         .status-expired { background-color: #f2f3f4; color: #95a5a6; }
+        
         .btn-delete { background-color: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
         .btn-delete:disabled { background-color: #bdc3c7; cursor: not-allowed; }
 
         /* 타임라인 바 스타일 */
-        .timeline-container {
-            position: relative;
-            width: 100%;
-            height: 20px;
-            background-color: #ecf0f1; /* 빈 공간 (회색) */
-            border-radius: 10px;
-            margin-top: 8px;
-            overflow: hidden;
-            border: 1px solid #bdc3c7;
-        }
-        .timeline-segment {
-            position: absolute;
-            height: 100%;
-            top: 0;
-            font-size: 10px;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            white-space: nowrap;
-        }
-        /* 예약 상태별 색상 */
-        .seg-Approved { background-color: #f39c12; } /* 예약됨 (주황) */
-        .seg-InUse { background-color: #3498db; }    /* 사용중 (파랑) */
-        .seg-Completed { background-color: #95a5a6; }/* 완료됨 (회색) */
+        .timeline-container { position: relative; width: 100%; height: 20px; background-color: #ecf0f1; border-radius: 10px; margin-top: 8px; overflow: hidden; border: 1px solid #bdc3c7; }
+        .timeline-segment { position: absolute; height: 100%; top: 0; font-size: 10px; color: white; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; }
+        .seg-Approved { background-color: #f39c12; } 
+        .seg-InUse { background-color: #3498db; }    
+        .seg-Completed { background-color: #95a5a6; }
+
+        /* [추가] 이용 내역 테이블 스타일 */
+        .history-table th { background-color: #eaecee; color: #555; font-size: 13px; }
+        .history-table td { font-size: 13px; color: #666; }
     </style>
 </head>
 <body>
@@ -96,24 +78,18 @@
             <div class="card-title">🚗 입주민 전용 게이트 통과</div>
             <div class="gate-controls">
                 <button class="gate-btn btn-entry" onclick="requestEntry()">
-                    <span>📥 입차 (귀가)</span>
-                    <small>자동 인식</small>
+                    <span>📥 입차 (귀가)</span> <small>자동 인식</small>
                 </button>
                 <button class="gate-btn btn-exit" onclick="requestExit()">
-                    <span>📤 출차 (외출)</span>
-                    <small>자동 인식</small>
+                    <span>📤 출차 (외출)</span> <small>자동 인식</small>
                 </button>
             </div>
-            <div class="gate-note">
-                입주민 차량은 LPR(번호인식) 시스템에 의해 자동으로 차단기가 열립니다.
-            </div>
+            <div class="gate-note">입주민 차량은 LPR(번호인식) 시스템에 의해 자동으로 차단기가 열립니다.</div>
         </div>
 
         <div class="card">
             <div class="card-title">🏠 내 주차 공간 정보</div>
-            <div id="mySpaceContainer">
-                <p>정보를 불러오는 중...</p>
-            </div>
+            <div id="mySpaceContainer"><p>정보를 불러오는 중...</p></div>
         </div>
 
         <div class="card">
@@ -135,26 +111,43 @@
                 </div>
                 <button class="primary" onclick="registerSchedule()">등록하기</button>
             </div>
-            <p style="font-size: 13px; color: #888; margin-top: 10px;">
-                ※ 등록한 시간 동안에는 일반 시민이 내 공간을 예약하여 사용할 수 있습니다.<br>
-                ※ 정각(00분) 단위로만 설정 가능합니다.
-            </p>
+            <p style="font-size: 13px; color: #888; margin-top: 10px;">※ 정각(00분) 단위로만 설정 가능합니다.</p>
         </div>
 
         <div class="card">
-            <div class="card-title">📋 나의 공유 내역 관리</div>
+            <div class="card-title">📋 나의 공유 일정 관리 (타임라인)</div>
             <table id="shareHistoryTable">
                 <thead>
                     <tr>
-                        <th>공유 기간</th>
+                        <th style="width: 45%;">공유 기간 / 예약 현황</th>
                         <th>상태</th>
-                        <th>예약 여부</th> 
+                        <th>예약 건수</th> 
                         <th>관리</th>
                     </tr>
                 </thead>
-                <tbody>
-                    </tbody>
+                <tbody></tbody>
             </table>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                📜 내 공간 최근 이용 내역 (History)
+                <button onclick="loadUsageHistory()" style="background:#95a5a6; color:white; border:none; border-radius:4px; padding:4px 8px; font-size:12px; cursor:pointer;">새로고침</button>
+            </div>
+            <div style="max-height: 200px; overflow-y: auto;">
+                <table class="history-table" id="usageHistoryTable">
+                    <thead>
+                        <tr>
+                            <th>방문 차량</th>
+                            <th>이용 시간</th>
+                            <th>상태</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="3" style="text-align:center;">로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -182,6 +175,7 @@
 
         loadMySpace();
         loadShareHistory();
+        loadUsageHistory(); // [추가] 이용 내역 로드
         initDateTimeFields();
 
         function initDateTimeFields() {
@@ -221,7 +215,6 @@
                 const response = await fetch(`/my-spaces?vehicle_id=${vehicleId}`);
                 const data = await response.json();
                 const container = document.getElementById('mySpaceContainer');
-
                 if (data.spaces && data.spaces.length > 0) {
                     const space = data.spaces[0];
                     mySpaceId = space.spaceid; 
@@ -237,49 +230,33 @@
                             </div>
                         </div>
                     `;
-                } else {
-                    container.innerHTML = `<div style="color:red;">할당된 주차 공간이 없습니다.</div>`;
-                }
+                } else { container.innerHTML = `<div style="color:red;">할당된 공간 없음</div>`; }
             } catch (error) { console.error(error); }
         }
 
         async function registerSchedule() {
-            if (!mySpaceId) { alert('주차 공간 정보 없음'); return; }
-            const startDate = document.getElementById('startDate').value;
-            const startTime = document.getElementById('startTime').value;
-            const endDate = document.getElementById('endDate').value;
-            const endTime = document.getElementById('endTime').value;
+            if (!mySpaceId) { alert('공간 정보 없음'); return; }
+            const sDate = document.getElementById('startDate').value;
+            const sTime = document.getElementById('startTime').value;
+            const eDate = document.getElementById('endDate').value;
+            const eTime = document.getElementById('endTime').value;
 
-            if (!startDate || !startTime || !endDate || !endTime) {
-                alert("날짜와 시간을 모두 선택해주세요."); return;
-            }
+            if (!sDate || !sTime || !eDate || !eTime) { alert("시간을 선택해주세요."); return; }
+            const start = `${sDate}T${sTime}`;
+            const end = `${eDate}T${eTime}`;
 
-            const startDateTime = `${startDate}T${startTime}`;
-            const endDateTime = `${endDate}T${endTime}`;
-
-            if (startDateTime >= endDateTime) {
-                alert('종료 시간은 시작 시간보다 늦어야 합니다.'); return;
-            }
+            if (start >= end) { alert('종료 시간이 시작 시간보다 늦어야 합니다.'); return; }
 
             try {
                 const response = await fetch('/schedule', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        VehicleID: vehicleId,
-                        SpaceID: mySpaceId,
-                        ShareStartTime: startDateTime,
-                        ShareEndTime: endDateTime
-                    })
+                    body: JSON.stringify({ VehicleID: vehicleId, SpaceID: mySpaceId, ShareStartTime: start, ShareEndTime: end })
                 });
                 const data = await response.json();
-                if (response.ok) {
-                    alert(data.message);
-                    loadShareHistory();
-                } else {
-                    alert(`등록 실패: ${data.error}`);
-                }
-            } catch (error) { alert('서버 통신 오류'); }
+                if (response.ok) { alert(data.message); loadShareHistory(); }
+                else { alert(`등록 실패: ${data.error}`); }
+            } catch (error) { alert('통신 오류'); }
         }
 
         async function loadShareHistory() {
@@ -290,29 +267,25 @@
                 tbody.innerHTML = '';
 
                 if (!data.shares || data.shares.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">등록된 공유 일정이 없습니다.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">공유 일정이 없습니다.</td></tr>';
                     return;
                 }
 
                 data.shares.forEach(item => {
                     const displayStart = formatTimeRaw(item.sharestarttime);
                     const displayEnd = formatTimeRaw(item.shareendtime);
-                    const canDelete = item.is_deletable; 
-
-                    // [타임라인 생성 로직]
-                    // 1. 전체 공유 시간(분 단위) 계산
+                    
+                    // 타임라인 로직
                     const shareStart = new Date(item.sharestarttime);
                     const shareEnd = new Date(item.shareendtime);
                     const totalMinutes = (shareEnd - shareStart) / 1000 / 60;
 
-                    // 2. 예약된 조각(Segment)들 HTML 생성
                     let timelineHTML = '';
                     if (item.bookings && item.bookings.length > 0) {
                         item.bookings.forEach(book => {
                             const bookStart = new Date(book.start);
                             const bookEnd = new Date(book.end);
                             
-                            // 시작 지점(%)과 너비(%) 계산
                             const startDiff = (bookStart - shareStart) / 1000 / 60;
                             const duration = (bookEnd - bookStart) / 1000 / 60;
                             
@@ -330,72 +303,73 @@
                     tr.innerHTML = `
                         <td>
                             <div>${displayStart} ~ ${displayEnd}</div>
-                            <div class="timeline-container" title="회색:빈공간 / 주황:예약 / 파랑:사용중">
-                                ${timelineHTML}
-                            </div>
+                            <div class="timeline-container" title="회색:빈공간 / 주황:예약 / 파랑:사용중">${timelineHTML}</div>
                         </td>
                         <td><span class="status-badge status-active">공유 중</span></td>
-                        <td>${item.bookings.length > 0 ? `${item.bookings.length}건 예약` : '없음'}</td>
+                        <td>${item.bookings.length > 0 ? `${item.bookings.length}건` : '-'}</td>
                         <td>
-                            <button class="btn-delete" 
-                                onclick="deleteSchedule(${item.shareid})" 
-                                ${!canDelete ? 'disabled title="사용 중인 예약이 있어 삭제 불가"' : ''}>
-                                삭제
-                            </button>
+                            <button class="btn-delete" onclick="deleteSchedule(${item.shareid})" 
+                                ${!item.is_deletable ? 'disabled title="사용 중인 예약 존재"' : ''}>삭제</button>
                         </td>
                     `;
                     tbody.appendChild(tr);
                 });
-
             } catch (error) { console.error(error); }
         }
 
+        // [신규] 이용 내역 조회 함수
+        async function loadUsageHistory() {
+            try {
+                const response = await fetch(`/my-space-history?vehicle_id=${vehicleId}`);
+                const data = await response.json();
+                const tbody = document.querySelector('#usageHistoryTable tbody');
+                tbody.innerHTML = '';
+
+                if (!data.history || data.history.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;">이용 내역이 없습니다.</td></tr>';
+                    return;
+                }
+
+                data.history.forEach(item => {
+                    const tr = document.createElement('tr');
+                    // Status 별 색상 스타일 (선택사항)
+                    let statusColor = 'gray';
+                    if(item.status === 'InUse') statusColor = 'blue';
+                    if(item.status === 'Approved') statusColor = 'orange';
+
+                    tr.innerHTML = `
+                        <td><strong>${item.visitorvehicleid}</strong></td>
+                        <td>${item.start_time} ~ ${item.end_time}</td>
+                        <td><span style="color:${statusColor}; font-weight:bold;">${item.status}</span></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) { console.error(e); }
+        }
+
         async function deleteSchedule(shareId) {
-            if(!confirm('이 공유 일정을 삭제하시겠습니까?')) return;
+            if(!confirm('삭제하시겠습니까?')) return;
             try {
                 const response = await fetch(`/schedule/${shareId}`, { method: 'DELETE' });
                 const data = await response.json();
-                if (response.ok) {
-                    alert('삭제되었습니다.');
-                    loadShareHistory();
-                } else {
-                    alert(`삭제 실패: ${data.error}`);
-                }
+                if (response.ok) { alert('삭제되었습니다.'); loadShareHistory(); }
+                else { alert(`삭제 실패: ${data.error}`); }
             } catch (error) { alert('오류 발생'); }
         }
 
-        // [추가됨] 입차 요청
         async function requestEntry() {
             try {
-                const response = await fetch('/entry-request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ VehicleID: vehicleId, GateID: 1 })
-                });
+                const response = await fetch('/entry-request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({VehicleID:vehicleId, GateID:1})});
                 const data = await response.json();
-                if (response.status === 200) {
-                    alert(`✅ [자동 승인] 어서오세요, 입주민님!\n게이트가 열렸습니다.`);
-                } else {
-                    alert(`⛔ 입차 실패: ${data.message || data.error}`);
-                }
-            } catch (error) { alert('통신 오류'); }
+                if(response.status===200) alert(`✅ ${data.message}`); else alert(`⛔ ${data.message||data.error}`);
+            } catch(e){alert('통신오류');}
         }
-
-        // [추가됨] 출차 요청
         async function requestExit() {
             try {
-                const response = await fetch('/exit-request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ VehicleID: vehicleId, GateID: 2 })
-                });
+                const response = await fetch('/exit-request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({VehicleID:vehicleId, GateID:2})});
                 const data = await response.json();
-                if (response.ok) {
-                    alert(`👋 [출차 완료] 안녕히 다녀오세요!`);
-                } else {
-                    alert(`❌ 출차 실패: ${data.error}`);
-                }
-            } catch (error) { alert('통신 오류'); }
+                if(response.status===200) alert(`👋 ${data.message}`); else alert(`❌ ${data.error}`);
+            } catch(e){alert('통신오류');}
         }
 
         function logout() {

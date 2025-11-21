@@ -715,5 +715,43 @@ def open_gate(gate_id):
     finally:
         conn.close()
 
+# ===============================================================
+# 22. [신규] 입주민: 내 공간 이용 내역 조회 (GET /my-space-history)
+# ===============================================================
+@app.route('/my-space-history', methods=['GET'])
+def get_my_space_history():
+    vehicle_id = request.args.get('vehicle_id')
+    if not vehicle_id: return jsonify(error="vehicle_id required"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 입주민의 공간을 예약했던 기록 조회 (최신순 20개)
+        # VisitorVehicleID(누가), 시간, 상태를 가져옴
+        query = sql.SQL("""
+            SELECT 
+                r.VisitorVehicleID,
+                to_char(r.ReserveStartTime, 'YYYY-MM-DD HH24:MI') as start_time,
+                to_char(r.ReserveEndTime, 'HH24:MI') as end_time, -- 종료는 시간만 표시 (공간 절약)
+                r.Status
+            FROM Reservation r
+            JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+            JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            WHERE ps.OwnerVehicleID = %s
+              AND r.Status IN ('Completed', 'InUse', 'Approved') -- 유효한 예약만 조회
+            ORDER BY r.ReserveStartTime DESC
+            LIMIT 20;
+        """)
+        
+        cur.execute(query, (vehicle_id,))
+        history = cur.fetchall()
+        
+        return jsonify(history=history), 200
+    except Exception as e:
+        return jsonify(error="서버 오류", details=str(e)), 500
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
     socketio.run(app, debug=True)
