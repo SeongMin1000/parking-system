@@ -160,21 +160,18 @@ def create_share_schedule():
 # ====================================================
 @app.route('/spaces', methods=['GET'])
 def get_available_spaces():
-    # 검색 조건 파라미터
-    search_start = request.args.get('start_time')
-    search_end = request.args.get('end_time')
-
-    # 파라미터가 없으면 에러 처리 혹은 기본값
-    if not search_start or not search_end:
-        return jsonify(error="시작 시간과 종료 시간을 입력해주세요."), 400
-
     conn = get_db_connection()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        search_start = request.args.get('start_time')
+        search_end = request.args.get('end_time')
 
-        # [수정된 쿼리]
-        # 1. 사용자가 요청한 시간(Request)이 공유 시간(Share) 범위 안에 포함되어야 함
-        # 2. fn_is_vehicle_in 함수로 입주민 부재 확인 (30분 룰)
+        if not search_start or not search_end:
+            return jsonify(error="시간을 입력해주세요"), 400
+
+        # [수정됨] 입주민 부재 확인 로직(fn_is_vehicle_in) 완전 삭제
+        # 공유 시간표(ShareSchedule)에 등록되어 있고, 다른 예약(Reservation)과 겹치지 않으면 무조건 통과
         query = sql.SQL("""
             SELECT 
                 ss.ShareID,
@@ -188,36 +185,23 @@ def get_available_spaces():
             JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
             WHERE 
                 pz.Status = 'Available'
-                -- [조건 1] 공유 시간이 사용자가 검색한 시간을 포함해야 함
+                -- 1. 사용자가 검색한 시간이 공유 시간 범위 안에 들어가는가?
                 AND ss.ShareStartTime <= %s 
                 AND ss.ShareEndTime >= %s
                 
-                -- [조건 2] 해당 시간에 겹치는 다른 예약이 없어야 함
+                -- 2. 해당 시간에 이미 확정된 예약이 없는가?
                 AND NOT EXISTS (
                     SELECT 1 FROM Reservation r 
                     WHERE r.ShareID = ss.ShareID 
                     AND r.Status IN ('Pending', 'Approved', 'InUse')
                     AND tsrange(r.ReserveStartTime, r.ReserveEndTime) && tsrange(%s::timestamp, %s::timestamp)
                 )
-                
-                -- [조건 3] 30분 이내 예약인 경우 입주민 차량 부재 확인
-                AND (
-                    %s::timestamp > (NOW() + INTERVAL '30 minute') -- 30분 뒤 예약은 무조건 OK
-                    OR
-                    fn_is_vehicle_in(ps.OwnerVehicleID) = FALSE -- 당장 예약은 입주민 없어야 함
-                )
             ORDER BY ss.ShareStartTime ASC;
         """)
         
-        # 파라미터 바인딩 (SQL Injection 방지 및 타입 안전성)
-        cur.execute(query, (search_start, search_end, search_start, search_end, search_start))
-        
+        cur.execute(query, (search_start, search_end, search_start, search_end))
         spaces = cur.fetchall()
         return jsonify(available_spaces=spaces), 200
-    except psycopg2.Error as e:
-        # DB 에러 시 콘솔에 출력하여 원인 파악
-        print(f"DB Error in /spaces: {e}")
-        return jsonify(error="데이터베이스 검색 오류", details=str(e)), 500
     finally:
         conn.close()
 
@@ -361,33 +345,43 @@ def parking_status():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # [핵심 수정] 상태(배경색)와 점유(차 아이콘)를 분리하여 조회
+        # [수정] 상태 우선순위 변경: 공유 시간이 되면 입주민 주차 여부 무시
         query = sql.SQL("""
             SELECT 
                 ps.SpaceID,
                 ps.SpaceNumber,
                 pz.ZoneName,
                 
-                -- [1] 운영 상태 (Operational Status) -> 배경색 결정
+                -- [1] 운영 상태 (배경색)
                 CASE 
                     WHEN pz.Status = 'Closed' THEN 'closed'
-                    -- 외부인이 이용 중이면 파란색 배경
+                    
+                    -- 외부인 이용 중 (가장 확실한 점유)
                     WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN 'external'
-                    -- 예약되었으면 노란색 배경
+                    
+                    -- 예약됨
                     WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status IN ('Pending', 'Approved') AND NOW() BETWEEN r.ReserveStartTime AND r.ReserveEndTime) THEN 'reserved'
-                    -- 공유 중이면 녹색 배경 (입주민 주차 여부와 상관없음!)
+                    
+                    -- [순서 변경] 공유 중이면 무조건 'shared' (입주민이 있어도 무시)
                     WHEN EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) THEN 'shared'
-                    -- 주인이 있으면 입주민 전용(남색), 없으면 미할당(투명)
+                    
+                    -- 입주민 점유 (위의 'shared' 조건에 걸리지 않았을 때만 체크됨)
                     WHEN ps.OwnerVehicleID IS NOT NULL THEN 'occupied'
+                    
                     ELSE 'unassigned'
                 END AS op_status,
 
-                -- [2] 물리적 점유 상태 (Physical Presence) -> 자동차 아이콘 표시 여부
+                -- [2] 물리적 점유 상태 (자동차 아이콘)
                 CASE
-                    -- 외부인이 들어와 있거나
+                    -- 외부인: 무조건 표시
                     WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN TRUE
-                    -- 입주민이 실제로 주차장에 있거나
-                    WHEN ps.OwnerVehicleID IS NOT NULL AND fn_is_vehicle_in(ps.OwnerVehicleID) = TRUE THEN TRUE
+                    
+                    -- [핵심 수정] 입주민: 실제로 주차장에 있고(fn_is_vehicle_in) + "공유 시간이 아닐 때만" 표시
+                    WHEN ps.OwnerVehicleID IS NOT NULL 
+                         AND fn_is_vehicle_in(ps.OwnerVehicleID) = TRUE
+                         AND NOT EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) -- 공유 시간엔 차 숨김
+                    THEN TRUE
+                    
                     ELSE FALSE
                 END AS is_occupied
 
@@ -407,8 +401,8 @@ def parking_status():
             zones_data[zname].append({
                 'id': space['spaceid'],
                 'num': space['spacenumber'],
-                'op_status': space['op_status'],   # 배경색용
-                'is_occupied': space['is_occupied'] # 아이콘용 (Boolean)
+                'op_status': space['op_status'],
+                'is_occupied': space['is_occupied']
             })
             
         return jsonify(zones_data)
