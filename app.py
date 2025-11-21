@@ -263,7 +263,8 @@ def request_entry():
         if log_status == 'Automatic':
             cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
             conn.commit()
-            socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+            # [수정] auto_close: True 추가
+            socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open', 'auto_close': True})
             return jsonify(message="자동 승인되었습니다. 어서오세요.", status="Automatic"), 200
         else:
             return jsonify(message="예약 시간 외 방문입니다. 관리자 호출 중...", status="Pending"), 202
@@ -298,7 +299,8 @@ def request_exit():
 
         cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
         conn.commit()
-        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+        # [수정] auto_close: True 추가
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open', 'auto_close': True})
         
         return jsonify(message="안녕히 가세요.", status="Approved"), 200
     except Exception as e:
@@ -327,7 +329,8 @@ def approve_entry():
         gate_id = res['gateid']
         cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
         conn.commit()
-        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
+        # [수정] auto_close: True 추가
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open', 'auto_close': True})
 
         return jsonify(message="승인 완료"), 200
     except Exception as e:
@@ -694,28 +697,53 @@ def get_all_zones():
         conn.close()
 
 # ===============================================================
-# 20. 관리자: 게이트 강제 개방 (POST /gate/open)
+# 20. [수정됨] 관리자: 게이트 상태 강제 제어 (Open / Closed)
+# 요청: POST /gate/<int:gate_id>/control 
+# Body: { "AdminVehicleID": "admin", "Status": "Open" 또는 "Closed" }
 # ===============================================================
-@app.route('/gate/<int:gate_id>/open', methods=['POST'])
-def open_gate(gate_id):
+@app.route('/gate/<int:gate_id>/control', methods=['POST'])
+def control_gate(gate_id):
     try:
-        admin_id = request.get_json()['AdminVehicleID']
-    except: return jsonify(error="AdminVehicleID 필요"), 400
+        data = request.get_json()
+        admin_id = data.get('AdminVehicleID')
+        target_status = data.get('Status') # 'Open' or 'Closed'
+    except Exception as e:
+        return jsonify(error="잘못된 요청입니다.", details=str(e)), 400
+
+    if not admin_id or target_status not in ['Open', 'Closed']:
+        return jsonify(error="필수 데이터 누락 또는 잘못된 상태값입니다."), 400
 
     conn = get_db_connection()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. 관리자 권한 확인
         cur.execute('SELECT Role FROM "User" WHERE VehicleID = %s', (admin_id,))
         user = cur.fetchone()
         if not user or user['role'] != 'Admin':
-            return jsonify(error="관리자 권한 없음"), 403
+            return jsonify(error="관리자 권한이 없습니다."), 403
 
-        cur.execute("UPDATE Gate SET Status='Open' WHERE GateID=%s", (gate_id,))
+        # 2. 게이트 상태 업데이트 (Open 또는 Closed로 고정)
+        cur.execute('UPDATE Gate SET Status = %s WHERE GateID = %s RETURNING GateID, GateName, Status', (target_status, gate_id))
+        updated_gate = cur.fetchone()
+        
+        if not updated_gate:
+            return jsonify(error="존재하지 않는 GateID입니다."), 404
+
         conn.commit()
-        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open'})
-        return jsonify(message="강제 개방 완료"), 200
+        
+        # 3. 소켓 전송 (모든 클라이언트의 화면 갱신)
+        # [수정] auto_close: False (비상 제어는 자동 닫힘 없음)
+        socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': target_status, 'auto_close': False})
+
+        action_text = "개방(Open)" if target_status == 'Open' else "폐쇄(Closed)"
+        return jsonify(message=f"게이트가 {action_text} 상태로 변경되었습니다.", gate=updated_gate), 200
+
+    except psycopg2.Error as e:
+        if conn: conn.rollback()
+        return jsonify(error="DB 오류", details=str(e)), 500
     finally:
-        conn.close()
+        if conn: conn.close()
 
 # ===============================================================
 # 22. 입주민: 내 공간 이용 내역 조회 (GET /my-space-history) - 수정됨

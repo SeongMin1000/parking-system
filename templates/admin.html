@@ -104,14 +104,30 @@
                 </div>
 
                 <div class="card">
-                    <div class="card-header">🚪 게이트 긴급 개방</div>
-                    <div class="gate-controls">
-                        <button class="btn-force-open" onclick="forceOpenGate(1)">
-                            <i>🔼</i> 정문 (Entry) 개방
-                        </button>
-                        <button class="btn-force-open" onclick="forceOpenGate(2)">
-                            <i>🔽</i> 후문 (Exit) 개방
-                        </button>
+                    <div class="card-header">🚪 게이트 비상 제어</div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <strong style="display:block; margin-bottom:5px;">🔼 입차 (Entry)</strong>
+                        <div class="gate-controls">
+                            <button class="btn-force-open" style="background-color:#27ae60;" onclick="controlGate(1, 'Open')">
+                                개방 (Open)
+                            </button>
+                            <button class="btn-force-open" style="background-color:#c0392b;" onclick="controlGate(1, 'Closed')">
+                                폐쇄 (Close)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <strong style="display:block; margin-bottom:5px;">🔽 출차 (Exit)</strong>
+                        <div class="gate-controls">
+                            <button class="btn-force-open" style="background-color:#27ae60;" onclick="controlGate(2, 'Open')">
+                                개방 (Open)
+                            </button>
+                            <button class="btn-force-open" style="background-color:#c0392b;" onclick="controlGate(2, 'Closed')">
+                                폐쇄 (Close)
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -258,17 +274,24 @@
         }
 
         // 3. 게이트
-        async function forceOpenGate(gateId) {
-            if(!confirm(`Gate ${gateId}번을 강제로 개방하시겠습니까?`)) return;
+        // [수정됨] 게이트 상태 제어 (Open/Close)
+        async function controlGate(gateId, status) {
+            const actionKor = status === 'Open' ? '개방' : '폐쇄';
+            if(!confirm(`Gate ${gateId}번을 강제로 '${actionKor}' 하시겠습니까?`)) return;
+            
             try {
-                const response = await fetch(`/gate/${gateId}/open`, {
+                // API 엔드포인트 변경됨 (/control)
+                const response = await fetch(`/gate/${gateId}/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ AdminVehicleID: vehicleId })
+                    body: JSON.stringify({ 
+                        AdminVehicleID: vehicleId,
+                        Status: status // Open or Closed
+                    })
                 });
                 const data = await response.json();
                 if (response.ok) {
-                    alert('게이트 개방 명령을 전송했습니다.');
+                    alert(data.message);
                 } else {
                     alert(data.error);
                 }

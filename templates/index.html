@@ -388,10 +388,13 @@
         socket.on('gate_status_changed', (data) => {
             updateGateUI(data.gate_id, data.status);
             
-            // 5초 후 자동으로 닫히는 애니메이션 (UI만)
-            if (data.status === 'Open') {
-                setTimeout(() => { updateGateUI(data.gate_id, 'Closed'); }, 5000);
+            // [수정] '자동 닫힘' 신호(auto_close)가 True일 때만 타이머 작동
+            if (data.status === 'Open' && data.auto_close === true) {
+                setTimeout(() => { 
+                    updateGateUI(data.gate_id, 'Closed'); 
+                }, 5000); // 5초 뒤 닫힘
             }
+            // auto_close가 False(관리자 강제 개방)면 타이머 안 돌고 계속 열려있음
         });
 
         function updateGateUI(gateId, status) {
