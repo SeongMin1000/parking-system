@@ -171,7 +171,9 @@ AFTER UPDATE OR DELETE ON ShareSchedule
 FOR EACH ROW
 EXECUTE FUNCTION fn_cancel_reservations_on_schedule_change();
 
--- [수정됨] 로직 6: 예약 유효성 검사 (과거 예약 방지 추가)
+-- =====================================================================
+-- [수정됨] 예약: 현재 시간의 '시(Hour)'부터는 예약 허용 (분 무시)
+-- =====================================================================
 CREATE OR REPLACE FUNCTION fn_validate_reservation()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -185,11 +187,10 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- [핵심 추가] 2. 과거 시간 예약 방지
-    -- (단, 'InUse' 상태로 업데이트 되는 경우(입차처리)는 이미 시간이 지났을 수 있으므로 제외)
-    -- 'Pending'이나 'Approved' 상태로 새로 들어오거나 변경될 때만 체크
-    IF NEW.Status IN ('Pending', 'Approved') AND NEW.ReserveStartTime < CURRENT_TIMESTAMP THEN
-        RAISE EXCEPTION '이미 지나간 과거 시간에는 예약할 수 없습니다.';
+    -- [핵심 수정] 2. 과거 시간 예약 방지 (현재 시각의 '정각' 기준)
+    IF NEW.Status IN ('Pending', 'Approved') 
+       AND NEW.ReserveStartTime < date_trunc('hour', CURRENT_TIMESTAMP) THEN
+        RAISE EXCEPTION '이미 지나간 과거 시간(이전 시간대)에는 예약할 수 없습니다.';
     END IF;
 
     -- 3. 공유 시간 범위 확인
@@ -366,14 +367,16 @@ AFTER INSERT ON GateLog
 FOR EACH ROW
 EXECUTE FUNCTION fn_update_reservation_status_after_gate();
 
--- [신규] 로직: 과거 시간 공유 등록 방지 트리거
+-- =====================================================================
+-- [수정됨] 공유 일정: 현재 시간의 '시(Hour)'부터는 등록 허용 (분 무시)
+-- =====================================================================
 CREATE OR REPLACE FUNCTION fn_check_past_time_share()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- 시작 시간이 현재 시간보다 이전이면 에러 (약간의 오차 허용 없이 엄격하게)
-    -- 수정(UPDATE)시에도 과거로 바꾸는 건 금지
-    IF NEW.ShareStartTime < CURRENT_TIMESTAMP THEN
-        RAISE EXCEPTION '이미 지나간 과거 시간에는 공유 일정을 등록할 수 없습니다.';
+    -- date_trunc('hour', NOW()) : 현재가 11:59여도 11:00으로 간주
+    -- 즉, 11:00 시작 스케줄을 11시 대에는 언제든 등록 가능
+    IF NEW.ShareStartTime < date_trunc('hour', CURRENT_TIMESTAMP) THEN
+        RAISE EXCEPTION '이미 지나간 과거 시간(이전 시간대)에는 공유 일정을 등록할 수 없습니다.';
     END IF;
     
     RETURN NEW;
