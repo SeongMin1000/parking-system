@@ -330,7 +330,8 @@
                 const zoneBox = document.createElement('div');
                 zoneBox.className = 'zone-box';
                 
-                if (spaces.length > 0 && spaces[0].status === 'closed') {
+                // 구역 자체가 폐쇄된 경우 시각적 처리
+                if (spaces.length > 0 && spaces[0].op_status === 'closed') {
                     zoneBox.classList.add('closed-zone');
                 }
 
@@ -344,21 +345,34 @@
 
                 spaces.forEach(space => {
                     const cell = document.createElement('div');
-                    cell.className = `parking-space status-${space.status}`;
                     
-                    if (['external', 'occupied', 'reserved'].includes(space.status)) {
+                    // 1. 배경색 클래스 적용 (op_status 기준)
+                    // 예: status-shared (녹색), status-occupied (남색)
+                    cell.className = `parking-space status-${space.op_status}`;
+                    
+                    // 2. 차량 아이콘 표시 (is_occupied 기준)
+                    if (space.is_occupied) {
                         cell.classList.add('has-car');
                     }
 
+                    // 3. 아이콘 종류 결정
                     let icon = '';
-                    if (space.status === 'external') icon = '🚙';
-                    else if (space.status === 'occupied') icon = '🚗';
-                    else if (space.status === 'reserved') icon = '🅿️';
+                    if (space.is_occupied) {
+                        // 외부인이면 파란차, 그 외(입주민)면 빨간차
+                        if (space.op_status === 'external') {
+                            icon = '🚙'; // 외부 차량
+                        } else {
+                            icon = '🚗'; // 입주민 차량 (shared 상태여도 입주민이 대고 있으면 이 아이콘)
+                        }
+                    } else if (space.op_status === 'reserved') {
+                        icon = '🅿️'; // 예약됨 (차는 없지만 예약 표시)
+                    }
 
                     cell.innerHTML = `
                         <div class="space-num">${space.num}</div>
                         <div class="car-icon">${icon}</div>
                     `;
+                    
                     grid.appendChild(cell);
                 });
 
@@ -366,6 +380,8 @@
                 container.appendChild(zoneBox);
             });
         }
+
+           
 
         // Socket.IO 게이트 제어
         const socket = io();
