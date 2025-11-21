@@ -220,7 +220,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fn_validate_reservation();
 
 -- =====================================================================
--- [수정됨] 로직 7: 게이트 제어 (입주민 공유 시간 중 입차 제한 추가)
+-- [최종 수정] 로직 7: 게이트 제어 (시간 만료 시 방문자 강제 퇴거 처리)
 -- =====================================================================
 CREATE OR REPLACE FUNCTION fn_gate_access_control()
 RETURNS TRIGGER AS $$
@@ -228,7 +228,7 @@ DECLARE
     v_reservation_id INT;
     v_user_role VARCHAR(10);
     v_is_inside BOOLEAN;
-    v_conflict_count INT; -- [추가] 충돌 확인용 변수
+    v_conflict_count INT;
 BEGIN
     -- 1. 사용자 역할 및 현재 위치 확인
     SELECT Role INTO v_user_role FROM "User" WHERE VehicleID = NEW.VehicleID;
@@ -237,7 +237,7 @@ BEGIN
     -- [입차 로직]
     IF NEW.Action = 'Entry' THEN
         
-        -- (예외 1) 이미 안에 있는데 또 입차하려는 경우
+        -- (예외 1) 중복 입차 방지
         IF v_is_inside THEN
             RAISE EXCEPTION '이미 주차장에 입차해 있는 차량입니다. (중복 입차 불가)';
         END IF;
@@ -245,20 +245,34 @@ BEGIN
         -- (A) 입주민일 경우
         IF v_user_role = 'Resident' THEN
             
-            -- [핵심 추가] 현재 내 자리에 유효한 예약(방문객)이 있는지 확인
+            -- [핵심 추가] 내 자리에 '시간이 만료된' 이용 중인 예약이 있다면 -> 강제로 'Completed' 처리
+            -- (방문자가 차를 안 뺐어도, 시간 끝났으니 시스템상으로는 뺀 걸로 침)
+            UPDATE Reservation r
+            SET Status = 'Completed'
+            FROM ShareSchedule ss, ParkingSpace ps
+            WHERE r.ShareID = ss.ShareID
+              AND ss.SpaceID = ps.SpaceID
+              AND ps.OwnerVehicleID = NEW.VehicleID -- 내 공간
+              AND r.Status = 'InUse'                -- 아직 안 나감(이용중)
+              AND r.ReserveEndTime < COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP); -- 근데 시간은 끝남!
+
+            -- [충돌 확인] "아직 시간이 남은" 방문자가 있는지 확인
             SELECT COUNT(*) INTO v_conflict_count
             FROM Reservation r
             JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
-            WHERE ps.OwnerVehicleID = NEW.VehicleID -- 내 공간
-              AND r.Status IN ('Approved', 'InUse') -- 예약됨 또는 사용중
-              AND (COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP) BETWEEN r.ReserveStartTime AND r.ReserveEndTime); -- 현재 시간이 예약 시간과 겹침
+            WHERE ps.OwnerVehicleID = NEW.VehicleID
+              AND (COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP) BETWEEN r.ReserveStartTime AND r.ReserveEndTime) -- 현재 유효한 시간
+              AND (
+                  r.Status = 'Approved' 
+                  OR 
+                  (r.Status = 'InUse' AND fn_is_vehicle_in(r.VisitorVehicleID) = TRUE)
+              );
 
             IF v_conflict_count > 0 THEN
-                RAISE EXCEPTION '현재 공유(예약)된 시간대이므로 입차할 수 없습니다. 방문객이 이용 중입니다.';
+                RAISE EXCEPTION '아직 예약 시간이 남은 방문객이 이용 중입니다.';
             END IF;
 
-            -- 문제가 없으면 자동 승인
             NEW.Status := 'Automatic';
         
         -- (B) 방문자일 경우
@@ -280,12 +294,12 @@ BEGIN
     -- [출차 로직]
     ELSIF NEW.Action = 'Exit' THEN
         
-        -- (예외 2) 이미 밖에 있는데 또 출차하려는 경우
+        -- (예외 2) 중복 출차 방지
         IF NOT v_is_inside THEN
             RAISE EXCEPTION '주차장에 없는 차량이거나 이미 출차했습니다. (중복 출차 불가)';
         END IF;
 
-        NEW.Status := 'Approved'; -- 출차는 누구든 항상 승인 (입주민이 공유 시간에 차 빼러 나가는 것도 허용)
+        NEW.Status := 'Approved';
         
         IF v_user_role = 'Visitor' THEN
             SELECT ReservationID INTO v_reservation_id
