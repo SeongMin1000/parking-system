@@ -53,6 +53,22 @@
         .log-entry { color: #27ae60; }
         .log-exit { color: #e67e22; }
 
+        /* [추가] 테이블 헤더 정렬 스타일 */
+        th { 
+            cursor: pointer; 
+            position: relative;
+        }
+        th:hover {
+            background-color: #e9ecef;
+        }
+        th::after {
+            content: "↕"; /* 정렬 가능 표시 */
+            font-size: 10px;
+            margin-left: 5px;
+            color: #aaa;
+            opacity: 0.5;
+        }
+
     </style>
 </head>
 <body>
@@ -265,10 +281,24 @@
             const tableHead = document.querySelector('#logTable thead');
             const tableBody = document.querySelector('#logTable tbody');
             
+            // [수정] 헤더에 onclick="sortTable(인덱스)" 추가
             if (type === 'gate') {
-                tableHead.innerHTML = '<tr><th>시간</th><th>차량번호</th><th>행동</th><th>상태</th><th>게이트</th></tr>';
+                tableHead.innerHTML = `
+                    <tr>
+                        <th onclick="sortTable(0)">시간</th>
+                        <th onclick="sortTable(1)">차량번호</th>
+                        <th onclick="sortTable(2)">행동</th>
+                        <th onclick="sortTable(3)">상태</th>
+                        <th onclick="sortTable(4)">게이트</th>
+                    </tr>`;
             } else {
-                tableHead.innerHTML = '<tr><th>예약시간</th><th>방문자</th><th>구역</th><th>상태</th></tr>';
+                tableHead.innerHTML = `
+                    <tr>
+                        <th onclick="sortTable(0)">예약시간</th>
+                        <th onclick="sortTable(1)">방문자</th>
+                        <th onclick="sortTable(2)">구역</th>
+                        <th onclick="sortTable(3)">상태</th>
+                    </tr>`;
             }
 
             try {
@@ -309,6 +339,45 @@
         function logout() {
             sessionStorage.clear();
             window.location.href = '/login';
+        }
+
+        // [신규] 테이블 정렬 함수 (클라이언트 사이드)
+        function sortTable(n) {
+            var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+            table = document.getElementById("logTable");
+            switching = true;
+            dir = "asc"; // 기본은 오름차순
+
+            while (switching) {
+                switching = false;
+                rows = table.rows;
+                // 헤더(0번행) 제외하고 반복
+                for (i = 1; i < (rows.length - 1); i++) {
+                    shouldSwitch = false;
+                    x = rows[i].getElementsByTagName("TD")[n];
+                    y = rows[i + 1].getElementsByTagName("TD")[n];
+                    
+                    // 내용 비교
+                    var xContent = x.innerHTML.toLowerCase();
+                    var yContent = y.innerHTML.toLowerCase();
+
+                    if (dir == "asc") {
+                        if (xContent > yContent) { shouldSwitch = true; break; }
+                    } else if (dir == "desc") {
+                        if (xContent < yContent) { shouldSwitch = true; break; }
+                    }
+                }
+                if (shouldSwitch) {
+                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                    switching = true;
+                    switchcount ++;
+                } else {
+                    if (switchcount == 0 && dir == "asc") {
+                        dir = "desc";
+                        switching = true;
+                    }
+                }
+            }
         }
     </script>
 </body>
