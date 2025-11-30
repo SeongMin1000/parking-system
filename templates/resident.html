@@ -281,6 +281,10 @@
                     // 타임라인 로직
                     const shareStart = new Date(item.sharestarttime);
                     const shareEnd = new Date(item.shareendtime);
+                    
+                    // [수정] 이미 지난 일정은 목록에서 숨김 처리
+                    if (shareEnd < new Date()) return;
+
                     const totalMinutes = (shareEnd - shareStart) / 1000 / 60;
 
                     let timelineHTML = '';
