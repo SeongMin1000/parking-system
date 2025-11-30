@@ -598,6 +598,7 @@ def get_pending_requests():
             WHERE Action='Entry' 
               AND Status='PendingApproval' 
               AND Timestamp > NOW() - INTERVAL '10 minutes'
+              AND fn_is_vehicle_in(VehicleID) = FALSE
             ORDER BY Timestamp ASC
         """)
         return jsonify(requests=cur.fetchall()), 200
