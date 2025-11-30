@@ -95,6 +95,23 @@
                 </div>
             </div>
 
+            <!-- [신규] 블랙리스트 관리 패널 -->
+            <div class="card" style="border-left: 5px solid #c0392b;">
+                <div class="card-header">
+                    🚫 블랙리스트 관리
+                    <div>
+                        <select id="blacklistFilter" onchange="loadBlacklistRequests()" style="font-size:12px; padding:3px;">
+                            <option value="Pending">신청 대기</option>
+                            <option value="Approved">차단 중 (목록)</option>
+                        </select>
+                        <button onclick="loadBlacklistRequests()" style="font-size:12px;">새로고침</button>
+                    </div>
+                </div>
+                <div id="blacklistRequestList">
+                    <div style="text-align:center; color:#999; padding:20px;">내역이 없습니다.</div>
+                </div>
+            </div>
+
             <div>
                 <div class="card" style="margin-bottom: 20px;">
                     <div class="card-header">🚧 구역 폐쇄/해제 통제</div>
@@ -150,8 +167,12 @@
         loadPendingRequests();
         loadZones();
         loadLogs();
+        loadBlacklistRequests(); // [추가]
 
-        setInterval(loadPendingRequests, 3000);
+        setInterval(() => {
+            loadPendingRequests();
+            loadBlacklistRequests(); // [추가]
+        }, 3000);
 
         // 1. 승인 대기
         async function loadPendingRequests() {
@@ -181,6 +202,106 @@
                     listDiv.appendChild(div);
                 });
             } catch (e) { console.error(e); }
+        }
+
+        // [신규] 블랙리스트 목록 로드
+        async function loadBlacklistRequests() {
+            const filter = document.getElementById('blacklistFilter').value; // Pending or Approved
+            const listDiv = document.getElementById('blacklistRequestList');
+            
+            try {
+                let url = '/admin/blacklist-requests'; // 기본: 대기 목록
+                if (filter === 'Approved') url = '/admin/blacklist/approved'; // 차단 목록
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (!data.requests || data.requests.length === 0) {
+                    listDiv.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">내역이 없습니다.</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = '';
+                data.requests.forEach(req => {
+                    const displayTime = formatTimeRaw(req.createdat);
+                    const processedTime = req.processedat ? formatTimeRaw(req.processedat) : '-';
+                    
+                    const div = document.createElement('div');
+                    div.className = 'request-item';
+                    
+                    let buttonsHtml = '';
+                    if (filter === 'Pending') {
+                        buttonsHtml = `
+                            <button onclick="approveBlacklist(${req.requestid})" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer; margin-right:5px;">차단 승인</button>
+                            <button onclick="rejectBlacklist(${req.requestid})" style="background:#95a5a6; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">반려</button>
+                        `;
+                    } else {
+                        buttonsHtml = `
+                            <button onclick="deleteBlacklist(${req.requestid})" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">차단 해제</button>
+                        `;
+                    }
+
+                    div.innerHTML = `
+                        <div class="req-info" style="width:100%;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <span class="req-time">[신청: ${displayTime}]</span>
+                                <span style="font-size:12px; color:#7f8c8d;">From: ${req.requestervehicleid}</span>
+                            </div>
+                            <div>대상: <strong>${req.targetvehicleid}</strong></div>
+                            <div style="font-size:13px; color:#c0392b; margin:5px 0;">사유: ${req.reason}</div>
+                            ${filter === 'Approved' ? `<div style="font-size:11px; color:#aaa;">처리일: ${processedTime}</div>` : ''}
+                            <div style="text-align:right; margin-top:10px;">
+                                ${buttonsHtml}
+                            </div>
+                        </div>
+                    `;
+                    listDiv.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        async function deleteBlacklist(reqId) {
+            if(!confirm('정말로 차단을 해제하시겠습니까?')) return;
+            try {
+                const response = await fetch(`/admin/blacklist/${reqId}`, { method: 'DELETE' });
+                const data = await response.json();
+                alert(data.message || data.error);
+                loadBlacklistRequests();
+            } catch(e) { alert('오류'); }
+        }
+
+        async function approveBlacklist(reqId) {
+            if(!confirm('해당 차량을 영구 차단하시겠습니까?\n(기존 예약은 모두 취소됩니다)')) return;
+            try {
+                const response = await fetch('/admin/blacklist/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ RequestID: reqId })
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert(data.message);
+                    loadBlacklistRequests();
+                } else {
+                    // [디버깅] 상세 에러 메시지 출력
+                    alert(`오류: ${data.error}\n상세: ${data.details || ''}`);
+                }
+            } catch(e) { alert('통신 오류'); }
+        }
+
+        async function rejectBlacklist(reqId) {
+            if(!confirm('신고를 반려하시겠습니까?')) return;
+            try {
+                const response = await fetch('/admin/blacklist/reject', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ RequestID: reqId })
+                });
+                const data = await response.json();
+                alert(data.message || data.error);
+                loadBlacklistRequests();
+            } catch(e) { alert('오류'); }
         }
 
         async function approveRequest(logId) {

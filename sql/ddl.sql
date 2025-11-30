@@ -1,11 +1,12 @@
 -- 기존 테이블 및 관련 객체 삭제 (생성 역순)
-DROP TABLE IF EXISTS GateLog;
-DROP TABLE IF EXISTS Gate;
-DROP TABLE IF EXISTS Reservation;
-DROP TABLE IF EXISTS ShareSchedule;
-DROP TABLE IF EXISTS ParkingSpace;
-DROP TABLE IF EXISTS ParkingZone;
-DROP TABLE IF EXISTS "User";
+DROP TABLE IF EXISTS BlacklistRequest CASCADE;
+DROP TABLE IF EXISTS GateLog CASCADE;
+DROP TABLE IF EXISTS Gate CASCADE;
+DROP TABLE IF EXISTS Reservation CASCADE;
+DROP TABLE IF EXISTS ShareSchedule CASCADE;
+DROP TABLE IF EXISTS ParkingSpace CASCADE;
+DROP TABLE IF EXISTS ParkingZone CASCADE;
+DROP TABLE IF EXISTS "User" CASCADE;
 
 -- 0. GIST 확장 활성화 (ShareSchedule의 시간 중복 방지용)
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -109,4 +110,18 @@ CREATE TABLE GateLog (
     FOREIGN KEY (ReservationID) REFERENCES Reservation(ReservationID) ON DELETE SET null,
     FOREIGN KEY (GateID) REFERENCES Gate(GateID),
     FOREIGN KEY (VehicleID) REFERENCES "User"(VehicleID)
+);
+
+-- 8. [추가] BlacklistRequest (블랙리스트 요청/관리 테이블)
+CREATE TABLE BlacklistRequest (
+    RequestID SERIAL PRIMARY KEY,
+    RequesterVehicleID VARCHAR(100) NOT NULL, -- 신고한 입주민
+    TargetVehicleID VARCHAR(100) NOT NULL,    -- 신고 당한 방문자
+    Reason TEXT NOT NULL,                     -- 신고 사유
+    Status VARCHAR(10) NOT NULL DEFAULT 'Pending' CHECK (Status IN ('Pending', 'Approved', 'Rejected')), 
+    CreatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ProcessedAt TIMESTAMP,                    -- 관리자 처리 일시
+
+    FOREIGN KEY (RequesterVehicleID) REFERENCES "User"(VehicleID),
+    FOREIGN KEY (TargetVehicleID) REFERENCES "User"(VehicleID)
 );

@@ -193,10 +193,21 @@ DECLARE
     v_share_end TIMESTAMP;
     v_zone_status VARCHAR(10);
     v_overlap_count INT;
+    v_blacklist_count INT; -- [추가]
 BEGIN
     -- 1. 취소/완료 상태 변경 시에는 검사 건너뜀
     IF NEW.Status IN ('Canceled', 'Completed') THEN
         RETURN NEW;
+    END IF;
+
+    -- [추가] 0. 블랙리스트 여부 확인 (취소가 아닐 때만 체크)
+    SELECT COUNT(*) INTO v_blacklist_count
+    FROM BlacklistRequest
+    WHERE TargetVehicleID = NEW.VisitorVehicleID
+      AND Status = 'Approved';
+
+    IF v_blacklist_count > 0 THEN
+        RAISE EXCEPTION '블랙리스트에 등록된 차량으로 예약이 불가능합니다.';
     END IF;
 
     -- [핵심 수정] 2. 과거 시간 예약 방지 (현재 시각의 '정각' 기준)
@@ -255,6 +266,7 @@ DECLARE
     v_user_role VARCHAR(10);
     v_is_inside BOOLEAN;
     v_conflict_count INT;
+    v_blacklist_count INT; -- [추가]
 BEGIN
     -- 1. 사용자 역할 및 현재 위치 확인
     SELECT Role INTO v_user_role FROM "User" WHERE VehicleID = NEW.VehicleID;
@@ -263,6 +275,16 @@ BEGIN
     -- [입차 로직]
     IF NEW.Action = 'Entry' THEN
         
+        -- [추가] 블랙리스트 체크
+        SELECT COUNT(*) INTO v_blacklist_count
+        FROM BlacklistRequest
+        WHERE TargetVehicleID = NEW.VehicleID
+          AND Status = 'Approved';
+          
+        IF v_blacklist_count > 0 THEN
+             RAISE EXCEPTION '블랙리스트에 등록된 차량은 입차가 거부됩니다.';
+        END IF;
+
         -- (예외 1) 중복 입차 방지
         IF v_is_inside THEN
             RAISE EXCEPTION '이미 주차장에 입차해 있는 차량입니다. (중복 입차 불가)';
@@ -381,6 +403,16 @@ BEGIN
     -- 2. 출차(Exit) 시 -> 조건에 따라 분기
     ELSIF NEW.Action = 'Exit' AND NEW.Status = 'Approved' AND NEW.ReservationID IS NOT NULL THEN
         
+        -- [추가] 블랙리스트(Approved)에 등록된 차량이면, 
+        -- 시스템이 자동으로 'Approved'(재입차 허용)로 되돌리는 것을 방지해야 함.
+        -- 그냥 상태 변경 없이 놔두면, 나중에 app.py가 'Canceled'로 바꿀 것임.
+        PERFORM 1 FROM BlacklistRequest 
+        WHERE TargetVehicleID = NEW.VehicleID AND Status = 'Approved';
+        
+        IF FOUND THEN
+            RETURN NEW; -- 아무것도 안 하고 종료
+        END IF;
+
         UPDATE Reservation
         SET Status = CASE 
             -- (A) 아직 예약 종료 시간이 안 지났으면 -> 'Approved'로 되돌림 (재입차 가능)

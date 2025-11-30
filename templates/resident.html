@@ -350,11 +350,38 @@
                         <td><strong>${item.visitorvehicleid}</strong></td>
                         <td>${visitorPhone}</td>
                         <td>${item.start_time} ~ ${item.end_time}</td>
-                        <td><span style="color:${statusColor}; font-weight:bold;">${item.status}</span></td>
+                        <td>
+                            <span style="color:${statusColor}; font-weight:bold;">${item.status}</span>
+                            <button onclick="reportUser('${item.visitorvehicleid}')" style="margin-left:10px; background:#e74c3c; color:white; border:none; border-radius:4px; cursor:pointer;">신고</button>
+                        </td>
                     `;
                     tbody.appendChild(tr);
                 });
             } catch (e) { console.error(e); }
+        }
+
+        // [신규] 블랙리스트 신고 함수
+        async function reportUser(targetVehicle) {
+            const reason = prompt(`[${targetVehicle}] 차량을 블랙리스트로 신고하시겠습니까?\n신고 사유를 입력해주세요.`);
+            if (!reason) return; // 취소 시 중단
+
+            try {
+                const response = await fetch('/blacklist/request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        RequesterVehicleID: vehicleId,
+                        TargetVehicleID: targetVehicle,
+                        Reason: reason
+                    })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    alert(data.message);
+                } else {
+                    alert(`신고 실패: ${data.error}`);
+                }
+            } catch (e) { alert('통신 오류'); }
         }
 
         async function deleteSchedule(shareId) {

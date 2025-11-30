@@ -712,5 +712,183 @@ def get_my_space_history():
     finally:
         conn.close()
 
+# ===============================================================
+# 23. [신규] 입주민: 블랙리스트 신청 (POST /blacklist/request)
+# ===============================================================
+@app.route('/blacklist/request', methods=['POST'])
+def request_blacklist():
+    try:
+        data = request.get_json()
+        requester = data['RequesterVehicleID']
+        target = data['TargetVehicleID']
+        reason = data['Reason']
+    except: return jsonify(error="데이터 누락"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 자기 자신 신고 방지
+        if requester == target:
+            return jsonify(error="자기 자신을 블랙리스트에 등록할 수 없습니다."), 400
+
+        cur.execute(
+            "INSERT INTO BlacklistRequest (RequesterVehicleID, TargetVehicleID, Reason) VALUES (%s, %s, %s) RETURNING RequestID",
+            (requester, target, reason)
+        )
+        rid = cur.fetchone()['requestid']
+        conn.commit()
+        return jsonify(message="블랙리스트 등재 신청이 접수되었습니다.", request_id=rid), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error="신청 실패", details=str(e)), 500
+    finally:
+        conn.close()
+
+# ===============================================================
+# 24. [신규] 관리자: 블랙리스트 신청 목록 조회 (GET /admin/blacklist-requests)
+# ===============================================================
+@app.route('/admin/blacklist-requests', methods=['GET'])
+def get_blacklist_requests():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # 최신 신청 순으로 정렬
+        cur.execute("""
+            SELECT * FROM BlacklistRequest 
+            WHERE Status = 'Pending'
+            ORDER BY CreatedAt DESC
+        """)
+        return jsonify(requests=cur.fetchall()), 200
+    finally:
+        conn.close()
+
+# ===============================================================
+# 25. [신규] 관리자: 블랙리스트 승인 (POST /admin/blacklist/approve)
+# ===============================================================
+@app.route('/admin/blacklist/approve', methods=['POST'])
+def approve_blacklist():
+    conn = None
+    try:
+        # 1. 데이터 파싱
+        data = request.get_json()
+        if not data or 'RequestID' not in data:
+            return jsonify(error="RequestID 데이터가 누락되었습니다."), 400
+        req_id = data['RequestID']
+
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2. 블랙리스트 상태 업데이트 (Approved)
+        cur.execute(
+            "UPDATE BlacklistRequest SET Status = 'Approved', ProcessedAt = CURRENT_TIMESTAMP WHERE RequestID = %s RETURNING TargetVehicleID",
+            (req_id,)
+        )
+        res = cur.fetchone()
+        
+        if not res:
+            return jsonify(error="해당 요청(ID:{})을 찾을 수 없거나 이미 처리되었습니다.".format(req_id)), 404
+        
+        target_vehicle = res['targetvehicleid']
+        
+        # 3. 현재 입차 여부 확인
+        cur.execute("SELECT fn_is_vehicle_in(%s) as is_in", (target_vehicle,))
+        row = cur.fetchone()
+        is_inside = row['is_in'] if row else False
+        
+        # 4. 입차 중이면 강제 출차 로그 생성
+        if is_inside:
+            cur.execute(
+                "INSERT INTO GateLog (VehicleID, GateID, Action, Status) VALUES (%s, 2, 'Exit', 'Approved')",
+                (target_vehicle,)
+            )
+
+        # 5. 기존 예약 취소 (Pending, Approved, InUse 모두)
+        cur.execute(
+            "UPDATE Reservation SET Status = 'Canceled' WHERE VisitorVehicleID = %s AND Status IN ('Pending', 'Approved', 'InUse')",
+            (target_vehicle,)
+        )
+        
+        conn.commit()
+        
+        msg = f"차량({target_vehicle})이 블랙리스트에 등록되었습니다."
+        if is_inside:
+            msg += " (현재 주차 중이어서 강제 출차 처리됨)"
+            
+        return jsonify(message=msg), 200
+
+    except Exception as e:
+        if conn: conn.rollback()
+        # 구체적인 에러 로그 반환
+        import traceback
+        traceback.print_exc() # 서버 콘솔에 출력
+        return jsonify(error="서버 내부 오류 발생", details=str(e)), 500
+    finally:
+        if conn: conn.close()
+
+# ===============================================================
+# 26. [신규] 관리자: 블랙리스트 거절 (POST /admin/blacklist/reject)
+# ===============================================================
+@app.route('/admin/blacklist/reject', methods=['POST'])
+def reject_blacklist():
+    try:
+        req_id = request.get_json()['RequestID']
+    except: return jsonify(error="RequestID 필요"), 400
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "UPDATE BlacklistRequest SET Status = 'Rejected', ProcessedAt = CURRENT_TIMESTAMP WHERE RequestID = %s RETURNING RequestID",
+            (req_id,)
+        )
+        if not cur.fetchone(): return jsonify(error="해당 요청이 없습니다."), 404
+        
+        conn.commit()
+        return jsonify(message="요청이 반려되었습니다."), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error="오류 발생", details=str(e)), 500
+    finally:
+        conn.close()
+
+# ===============================================================
+# 27. [신규] 관리자: 차단된 목록 조회 (GET /admin/blacklist/approved)
+# ===============================================================
+@app.route('/admin/blacklist/approved', methods=['GET'])
+def get_approved_blacklist():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT * FROM BlacklistRequest 
+            WHERE Status = 'Approved'
+            ORDER BY ProcessedAt DESC
+        """)
+        return jsonify(requests=cur.fetchall()), 200
+    finally:
+        conn.close()
+
+# ===============================================================
+# 28. [신규] 관리자: 차단 해제 (DELETE /admin/blacklist/<int:request_id>)
+# ===============================================================
+@app.route('/admin/blacklist/<int:request_id>', methods=['DELETE'])
+def delete_blacklist(request_id):
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # 기록을 완전히 삭제하여 차단 해제
+        cur.execute("DELETE FROM BlacklistRequest WHERE RequestID = %s RETURNING TargetVehicleID", (request_id,))
+        res = cur.fetchone()
+        if not res: return jsonify(error="존재하지 않는 내역입니다."), 404
+        
+        conn.commit()
+        return jsonify(message=f"차량({res['targetvehicleid']})의 차단이 해제되었습니다."), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error="오류 발생", details=str(e)), 500
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
     socketio.run(app, debug=True)
