@@ -314,7 +314,7 @@
             try {
                 const response = await fetch('/parking-status');
                 const data = await response.json();
-                renderMap(data);
+                renderMap(data.zones_data);
             } catch (error) { console.error(error); }
         }
 

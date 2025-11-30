@@ -1,6 +1,10 @@
 -- =====================================================================
 -- 0. [초기화] 기존 트리거 및 함수 삭제 (깨끗하게 재설치)
 -- =====================================================================
+
+-- 1) 뷰 삭제 (함수 삭제 시 에러 방지)
+DROP VIEW IF EXISTS View_ParkingStatus CASCADE;
+
 DROP TRIGGER IF EXISTS tr_check_owner_role ON ParkingSpace;
 DROP TRIGGER IF EXISTS tr_assign_specific_space ON "User";
 DROP TRIGGER IF EXISTS tr_auto_assign_space ON "User";
@@ -398,3 +402,30 @@ CREATE TRIGGER tr_check_past_time_share
 BEFORE INSERT OR UPDATE ON ShareSchedule
 FOR EACH ROW
 EXECUTE FUNCTION fn_check_past_time_share();
+
+
+CREATE OR REPLACE VIEW View_ParkingStatus AS
+SELECT 
+    ps.SpaceID,
+    ps.SpaceNumber,
+    pz.ZoneName,
+    
+    -- [1] 운영 상태 (배경색)
+    CASE 
+        WHEN pz.Status = 'Closed' THEN 'closed'
+        WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN 'external'
+        WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status IN ('Pending', 'Approved') AND NOW() BETWEEN r.ReserveStartTime AND r.ReserveEndTime) THEN 'reserved'
+        WHEN EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) THEN 'shared'
+        WHEN ps.OwnerVehicleID IS NOT NULL THEN 'occupied'
+        ELSE 'unassigned'
+    END AS op_status,
+
+    -- [2] 물리적 점유 상태 (아이콘)
+    CASE
+        WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN TRUE
+        WHEN ps.OwnerVehicleID IS NOT NULL AND fn_is_vehicle_in(ps.OwnerVehicleID) = TRUE THEN TRUE
+        ELSE FALSE
+    END AS is_occupied
+
+FROM ParkingSpace ps
+JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID;

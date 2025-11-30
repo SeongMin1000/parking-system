@@ -348,53 +348,25 @@ def parking_status():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # [수정] 상태 우선순위 변경: 공유 시간이 되면 입주민 주차 여부 무시
-        query = sql.SQL("""
-            SELECT 
-                ps.SpaceID,
-                ps.SpaceNumber,
-                pz.ZoneName,
-                
-                -- [1] 운영 상태 (배경색)
-                CASE 
-                    WHEN pz.Status = 'Closed' THEN 'closed'
-                    
-                    -- 외부인 이용 중 (가장 확실한 점유)
-                    WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN 'external'
-                    
-                    -- 예약됨
-                    WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status IN ('Pending', 'Approved') AND NOW() BETWEEN r.ReserveStartTime AND r.ReserveEndTime) THEN 'reserved'
-                    
-                    -- [순서 변경] 공유 중이면 무조건 'shared' (입주민이 있어도 무시)
-                    WHEN EXISTS (SELECT 1 FROM ShareSchedule ss WHERE ss.SpaceID = ps.SpaceID AND NOW() BETWEEN ss.ShareStartTime AND ss.ShareEndTime) THEN 'shared'
-                    
-                    -- 입주민 점유 (위의 'shared' 조건에 걸리지 않았을 때만 체크됨)
-                    WHEN ps.OwnerVehicleID IS NOT NULL THEN 'occupied'
-                    
-                    ELSE 'unassigned'
-                END AS op_status,
-
-                -- [2] 물리적 점유 상태 (자동차 아이콘)
-                CASE
-                    -- 외부인: 무조건 표시
-                    WHEN EXISTS (SELECT 1 FROM Reservation r JOIN ShareSchedule ss ON r.ShareID = ss.ShareID WHERE ss.SpaceID = ps.SpaceID AND r.Status = 'InUse') THEN TRUE
-                    
-                    -- [핵심 수정] 입주민: 실제로 주차장에 있고(fn_is_vehicle_in) + "공유 시간이 아닐 때만" 표시
-                    WHEN ps.OwnerVehicleID IS NOT NULL 
-                         AND fn_is_vehicle_in(ps.OwnerVehicleID) = TRUE
-                    THEN TRUE
-                    
-                    ELSE FALSE
-                END AS is_occupied
-
-            FROM ParkingSpace ps
-            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
-            ORDER BY pz.ZoneName, ps.SpaceNumber;
-        """)
-        
-        cur.execute(query)
+        # 1. View 조회 
+        cur.execute("SELECT * FROM View_ParkingStatus ORDER BY ZoneName, SpaceNumber")
         spaces = cur.fetchall()
         
+        # 2. 미예약 입차 차량 조회
+        cur.execute("""
+            SELECT u.VehicleID
+            FROM "User" u
+            WHERE u.Role = 'Visitor'
+              AND fn_is_vehicle_in(u.VehicleID) = TRUE
+              AND NOT EXISTS (
+                  SELECT 1 FROM Reservation r 
+                  WHERE r.VisitorVehicleID = u.VehicleID 
+                    AND r.Status = 'InUse'
+              )
+        """)
+        ghost_cars = [row['vehicleid'] for row in cur.fetchall()]
+
+        # 데이터 변환
         zones_data = {}
         for space in spaces:
             zname = space['zonename']
@@ -407,7 +379,7 @@ def parking_status():
                 'is_occupied': space['is_occupied']
             })
             
-        return jsonify(zones_data)
+        return jsonify(zones_data=zones_data, ghost_cars=ghost_cars)
     finally:
         conn.close()
 
