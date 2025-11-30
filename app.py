@@ -593,7 +593,13 @@ def get_pending_requests():
     conn = get_db_connection()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM GateLog WHERE Action='Entry' AND Status='PendingApproval' ORDER BY Timestamp ASC")
+        cur.execute("""
+            SELECT * FROM GateLog 
+            WHERE Action='Entry' 
+              AND Status='PendingApproval' 
+              AND Timestamp > NOW() - INTERVAL '10 minutes'
+            ORDER BY Timestamp ASC
+        """)
         return jsonify(requests=cur.fetchall()), 200
     finally:
         conn.close()
