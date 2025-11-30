@@ -571,6 +571,7 @@ def get_my_shares():
             JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
             LEFT JOIN Reservation r ON ss.ShareID = r.ShareID
             WHERE ps.OwnerVehicleID = %s
+            AND ss.ShareEndTime > CURRENT_TIMESTAMP
             GROUP BY ss.ShareID, ss.SpaceID, ss.ShareStartTime, ss.ShareEndTime, ps.SpaceID
             ORDER BY ss.ShareStartTime DESC;
         """)
