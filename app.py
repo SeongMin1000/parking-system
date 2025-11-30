@@ -572,6 +572,8 @@ def get_my_shares():
             LEFT JOIN Reservation r ON ss.ShareID = r.ShareID
             WHERE ps.OwnerVehicleID = %s
             GROUP BY ss.ShareID, ss.SpaceID, ss.ShareStartTime, ss.ShareEndTime, ps.SpaceID
+            -- [수정] HAVING 절 추가: 최근 6개월 내역만 보기
+            HAVING MAX(ss.ShareEndTime) > NOW() - INTERVAL '6 months'
             ORDER BY ss.ShareStartTime DESC;
         """)
         
