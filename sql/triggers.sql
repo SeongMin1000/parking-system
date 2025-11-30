@@ -310,6 +310,28 @@ BEGIN
               AND (COALESCE(NEW.Timestamp, CURRENT_TIMESTAMP) BETWEEN ReserveStartTime AND ReserveEndTime);
             
             IF v_reservation_id IS NOT NULL THEN
+                -- [추가] 방문자가 예약으로 들어오면, 해당 자리를 내준 집주인(입주민)은 
+                -- 시스템상 '출차' 상태가 되어야 논리적으로 맞음 (유령 차량 방지)
+                DECLARE
+                    v_owner_id VARCHAR;
+                    v_is_owner_in BOOLEAN;
+                BEGIN
+                    SELECT ps.OwnerVehicleID INTO v_owner_id
+                    FROM Reservation r
+                    JOIN ShareSchedule ss ON r.ShareID = ss.ShareID
+                    JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+                    WHERE r.ReservationID = v_reservation_id;
+
+                    IF v_owner_id IS NOT NULL THEN
+                        v_is_owner_in := fn_is_vehicle_in(v_owner_id);
+                        IF v_is_owner_in THEN
+                            -- 집주인을 강제로 출차 처리 (GateID는 2번(Exit)로 가정)
+                            INSERT INTO GateLog (VehicleID, GateID, Action, Status)
+                            VALUES (v_owner_id, 2, 'Exit', 'Approved');
+                        END IF;
+                    END IF;
+                END;
+
                 NEW.Status := 'Automatic';
                 NEW.ReservationID := v_reservation_id;
             ELSE
