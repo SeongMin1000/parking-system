@@ -125,36 +125,3 @@ CREATE TABLE BlacklistRequest (
     FOREIGN KEY (RequesterVehicleID) REFERENCES "User"(VehicleID),
     FOREIGN KEY (TargetVehicleID) REFERENCES "User"(VehicleID)
 );
-
--- =========================================================
--- [Authorization] 보안 시나리오: 역할별 권한 부여 (DCL)
--- 과제 요구사항 충족을 위한 역할(Role) 생성 및 권한 부여 예시
--- =========================================================
-
--- 1. 역할(Role) 생성
--- 실제 운영 환경에서는 이 역할들을 사용자(User)에게 부여하여 사용합니다.
-CREATE ROLE role_admin;     -- 관리자
-CREATE ROLE role_resident;  -- 입주민
-CREATE ROLE role_visitor;   -- 방문자
-
--- 2. 관리자(Admin) 권한: 모든 테이블에 대한 모든 권한 부여
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO role_admin;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO role_admin;
-
--- 3. 입주민(Resident) 권한
--- 주차 현황 조회 가능
-GRANT SELECT ON ParkingZone, ParkingSpace, ShareSchedule, View_ParkingStatus TO role_resident;
--- 자신의 공유 일정 등록/수정/삭제 가능
-GRANT INSERT, UPDATE, DELETE ON ShareSchedule TO role_resident;
--- 예약 현황은 조회만 가능 (삭제는 트리거가 처리하거나 자신의 것만 가능하도록 로직 제어)
-GRANT SELECT ON Reservation TO role_resident;
--- 입주민 전용 게이트 로그 조회
-GRANT SELECT ON GateLog TO role_resident;
-
--- 4. 방문자(Visitor) 권한
--- 주차 현황 조회 가능
-GRANT SELECT ON View_ParkingStatus, ShareSchedule TO role_visitor;
--- 예약 생성(INSERT) 및 내 예약 조회/취소(SELECT, DELETE)
-GRANT INSERT, SELECT, DELETE ON Reservation TO role_visitor;
--- 내 차량 정보 수정 (연락처 등)
-GRANT UPDATE ON "User" TO role_visitor;

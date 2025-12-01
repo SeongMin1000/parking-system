@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 import psycopg2
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, session
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
 import bcrypt
@@ -16,11 +16,17 @@ app = Flask(__name__)
 socketio = SocketIO(app)
 
 # --- 데이터베이스 연결 설정 ---
-def get_db_connection():
+# [app.py] get_db_connection 함수 교체
+
+def get_db_connection(user=None, password=None):
+    # 인자로 계정 정보가 들어오면 그걸 쓰고, 없으면 .env의 기본값(관리자) 사용
+    target_user = user if user else os.getenv('DB_USER')
+    target_pw = password if password else os.getenv('DB_PASSWORD')
+    
     conn = psycopg2.connect(
         dbname=os.getenv('DB_NAME'),
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASSWORD'),
+        user=target_user,
+        password=target_pw,
         host=os.getenv('DB_HOST'),
         port=os.getenv('DB_PORT')
     )
@@ -342,17 +348,66 @@ def approve_entry():
 # ===============================================================
 # 9. 전체 주차 공간 현황 조회 (GET /parking-status) - Index 페이지용
 # ===============================================================
+# @app.route('/parking-status')
+# def parking_status():
+#     conn = get_db_connection()
+#     try:
+#         cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+#         # 1. View 조회 
+#         cur.execute("SELECT * FROM View_ParkingStatus ORDER BY ZoneName, SpaceNumber")
+#         spaces = cur.fetchall()
+        
+#         # 2. 미예약 입차 차량 조회
+#         cur.execute("""
+#             SELECT u.VehicleID
+#             FROM "User" u
+#             WHERE u.Role = 'Visitor'
+#               AND fn_is_vehicle_in(u.VehicleID) = TRUE
+#               AND NOT EXISTS (
+#                   SELECT 1 FROM Reservation r 
+#                   WHERE r.VisitorVehicleID = u.VehicleID 
+#                     AND r.Status = 'InUse'
+#               )
+#         """)
+#         ghost_cars = [row['vehicleid'] for row in cur.fetchall()]
+
+#         # 데이터 변환
+#         zones_data = {}
+#         for space in spaces:
+#             zname = space['zonename']
+#             if zname not in zones_data: zones_data[zname] = []
+            
+#             zones_data[zname].append({
+#                 'id': space['spaceid'],
+#                 'num': space['spacenumber'],
+#                 'op_status': space['op_status'],
+#                 'is_occupied': space['is_occupied']
+#             })
+            
+#         return jsonify(zones_data=zones_data, ghost_cars=ghost_cars)
+#     finally:
+#         conn.close()
+
+# [app.py] parking_status 함수 수정
+
 @app.route('/parking-status')
 def parking_status():
-    conn = get_db_connection()
+    # .env에서 방금 추가한 guest 계정 정보 가져오기
+    guest_user = os.getenv('DB_GUEST_USER')
+    guest_pw = os.getenv('DB_GUEST_PASSWORD')
+
+    # [핵심] 여기만 guest 계정으로 DB 접속!
+    conn = get_db_connection(user=guest_user, password=guest_pw)
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. View 조회 
+        # 1. View 조회
         cur.execute("SELECT * FROM View_ParkingStatus ORDER BY ZoneName, SpaceNumber")
         spaces = cur.fetchall()
         
-        # 2. 미예약 입차 차량 조회
+        # 2. 미예약 입차 차량(유령 차량) 조회
         cur.execute("""
             SELECT u.VehicleID
             FROM "User" u
@@ -366,7 +421,7 @@ def parking_status():
         """)
         ghost_cars = [row['vehicleid'] for row in cur.fetchall()]
 
-        # 데이터 변환
+        # 데이터 변환 (기존 로직 동일)
         zones_data = {}
         for space in spaces:
             zname = space['zonename']
@@ -380,6 +435,12 @@ def parking_status():
             })
             
         return jsonify(zones_data=zones_data, ghost_cars=ghost_cars)
+    
+    # [추가] 권한 에러 발생 시 처리 (혹시 모르니 추가)
+    except psycopg2.Error as e:
+        print("DB Error:", e) # 서버 콘솔에 에러 출력
+        return jsonify(error="데이터 조회 권한이 없습니다."), 403
+        
     finally:
         conn.close()
 
