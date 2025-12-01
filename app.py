@@ -133,12 +133,27 @@ def login_user():
 # ===============================================
 # 3. 입주민: 비움 시간 등록
 # ===============================================
+# [app.py] create_share_schedule 함수 수정
+# - 현재 시각(9:30)이어도 9:00부터는 등록 허용 (과거 시간 방지 로직 개선)
+
 @app.route('/schedule', methods=['POST'])
 def create_share_schedule():
     try:
         data = request.get_json()
-        vehicle_id, space_id, start_time, end_time = data['VehicleID'], data['SpaceID'], data['ShareStartTime'], data['ShareEndTime']
-    except: return jsonify(error="데이터 누락"), 400
+        vehicle_id, space_id = data['VehicleID'], data['SpaceID']
+        start_time, end_time = data['ShareStartTime'], data['ShareEndTime']
+        
+        # 1. [검증] 과거 시간 등록 방지
+        # 예: 현재 9:30이면 9:00부터 등록 가능 -> 현재 시간의 분/초를 버림(Floor) 처리
+        start_dt = datetime.strptime(start_time, '%Y-%m-%dT%H:%M')
+        now = datetime.now()
+        min_allowed = now.replace(minute=0, second=0, microsecond=0)
+
+        if start_dt < min_allowed:
+            return jsonify(error="이미 지나간 과거 시간에는 등록할 수 없습니다."), 400
+            
+    except Exception as e: 
+        return jsonify(error="데이터 처리 오류", details=str(e)), 400
 
     conn = get_db_connection()
     try:
@@ -162,7 +177,6 @@ def create_share_schedule():
         return jsonify(error="등록 실패 (중복 등)", details=str(e)), 400
     finally:
         conn.close()
-
 # ====================================================
 # 4. 방문자: 예약 가능한 공간 조회
 # ====================================================
@@ -198,23 +212,49 @@ def get_available_spaces():
 # =========================================================
 # 5. 방문자: 주차 예약 (트리거 제거 -> 파이썬 로직 구현)
 # =========================================================
+# [app.py] create_reservation 함수 수정
+# - 현재 시각(9:30)이어도 9:00부터는 예약 허용
+
 @app.route('/reservation', methods=['POST'])
 def create_reservation():
     try:
         data = request.get_json()
         vehicle_id, share_id = data['VehicleID'], data['ShareID']
         start, end = data['ReserveStartTime'], data['ReserveEndTime']
-    except: return jsonify(error="데이터 누락"), 400
+        
+        # 1. [검증] 과거 시간 예약 방지
+        start_dt = datetime.strptime(start, '%Y-%m-%dT%H:%M')
+        now = datetime.now()
+        min_allowed = now.replace(minute=0, second=0, microsecond=0)
+
+        if start_dt < min_allowed:
+             return jsonify(error="이미 지나간 과거 시간에는 예약할 수 없습니다."), 400
+             
+    except Exception as e: 
+        return jsonify(error="데이터 처리 오류", details=str(e)), 400
 
     conn = get_db_connection()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 1. [로직 추가] 블랙리스트 검사
+        # 2. 블랙리스트 검사
         cur.execute("SELECT 1 FROM BlacklistRequest WHERE TargetVehicleID = %s AND Status = 'Approved'", (vehicle_id,))
         if cur.fetchone(): return jsonify(error="블랙리스트 차량입니다."), 403
 
-        # 2. [로직 추가] 중복 예약 검사
+        # 3. 구역 폐쇄 여부 검사
+        cur.execute("""
+            SELECT pz.Status, pz.ZoneName
+            FROM ShareSchedule ss
+            JOIN ParkingSpace ps ON ss.SpaceID = ps.SpaceID
+            JOIN ParkingZone pz ON ps.ZoneID = pz.ZoneID
+            WHERE ss.ShareID = %s
+        """, (share_id,))
+        zone_info = cur.fetchone()
+
+        if zone_info and zone_info['status'] == 'Closed':
+            return jsonify(error=f"해당 구역({zone_info['zonename']})은 현재 폐쇄되어 예약할 수 없습니다."), 403
+
+        # 4. 중복 예약 검사
         cur.execute("""
             SELECT 1 FROM Reservation
             WHERE ShareID = %s
@@ -223,7 +263,7 @@ def create_reservation():
         """, (share_id, start, end))
         if cur.fetchone(): return jsonify(error="이미 예약된 시간입니다."), 409
 
-        # 3. 예약 INSERT
+        # 5. 예약 INSERT
         cur.execute(
             "INSERT INTO Reservation (ShareID, VisitorVehicleID, ReserveStartTime, ReserveEndTime, Status) VALUES (%s, %s, %s, %s, 'Approved') RETURNING ReservationID",
             (share_id, vehicle_id, start, end)
