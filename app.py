@@ -417,7 +417,9 @@ def request_exit():
 # =========================================================
 # 8. 관리자: 입차 승인 (수동)
 # =========================================================
-# [app.py] approve_entry 함수 수정 (블랙리스트 최종 검사 추가)
+# [app.py] approve_entry 함수 수정
+# - 블랙리스트 체크 유지
+# - [추가] 하나를 승인하면, 동일 차량의 나머지 대기 요청은 자동 거절(목록 제거) 처리
 
 @app.route('/approve-entry', methods=['POST'])
 def approve_entry():
@@ -438,21 +440,33 @@ def approve_entry():
             
         target_vehicle = log_entry['vehicleid']
 
-        # 2. [추가] 승인 직전 블랙리스트 여부 재확인
+        # 2. 블랙리스트 여부 재확인 (안전장치)
         cur.execute("SELECT 1 FROM BlacklistRequest WHERE TargetVehicleID = %s AND Status = 'Approved'", (target_vehicle,))
         if cur.fetchone():
             return jsonify(error=f"⛔ 차단된 차량({target_vehicle})입니다. 승인할 수 없습니다."), 403
 
-        # 3. 이상 없으면 승인 처리
+        # 3. 해당 요청 승인 처리
         cur.execute("UPDATE GateLog SET Status = 'Approved' WHERE LogID = %s RETURNING GateID", (log_id,))
         res = cur.fetchone()
 
+        # 4. [핵심 추가] 동일 차량의 나머지 '대기 중' 요청들은 자동 거절(Denied) 처리
+        #    -> 이렇게 하면 관리자 대기 목록(Pending List)에서 즉시 사라집니다.
+        cur.execute("""
+            UPDATE GateLog 
+            SET Status = 'Denied' 
+            WHERE VehicleID = %s 
+              AND Status = 'PendingApproval' 
+              AND Action = 'Entry'
+              AND LogID != %s
+        """, (target_vehicle, log_id))
+
+        # 5. 게이트 열기
         gate_id = res['gateid']
         cur.execute("UPDATE Gate SET Status = 'Open' WHERE GateID = %s", (gate_id,))
         conn.commit()
 
         socketio.emit('gate_status_changed', {'gate_id': gate_id, 'status': 'Open', 'auto_close': True})
-        return jsonify(message="승인 완료 (게이트 개방)"), 200
+        return jsonify(message="승인 완료 (중복 요청은 자동 정리됨)"), 200
 
     except Exception as e:
         conn.rollback()
