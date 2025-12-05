@@ -1,3 +1,8 @@
+-- 기존 뷰와 함수를 강제로 삭제 (CASCADE 옵션이 연관된 객체도 같이 정리해줌)
+DROP FUNCTION IF EXISTS fn_is_vehicle_in(VARCHAR) CASCADE;
+DROP VIEW IF EXISTS View_ParkingStatus CASCADE;
+
+
 -- 1. 차량이 현재 주차장에 있는지 확인하는 함수
 CREATE OR REPLACE FUNCTION fn_is_vehicle_in(p_vehicle_id VARCHAR)
 RETURNS BOOLEAN AS $$
