@@ -41,7 +41,7 @@
 
 ```bash
 # 레포지토리 클론 (예시)
-git clone https://https://github.com/SeongMin1000/parking-system.git
+git clone https://github.com/SeongMin1000/parking-system.git
 cd parking-system
 
 # 가상환경 생성 (권장)
